@@ -69,11 +69,22 @@ def main():
 
     W, H = 800, 600
 
-    # Burst 1: park, 10 frames at ~100ms apart
+    # Burst 1: park, 10 frames at ~100ms apart.
+    # Frames 03, 05, 08 are deliberately degraded (blur / overexposed / underexposed)
+    # so M2 tech scoring can be verified end-to-end.
+    from PIL import ImageFilter
     base = dt.datetime(2026, 5, 23, 10, 0, 0)
     for i in range(10):
         ts = base + dt.timedelta(milliseconds=100 * i)
         img = draw_scene(W, H, "park", jitter=i)
+        if i == 3:
+            img = img.filter(ImageFilter.GaussianBlur(radius=6))   # motion blur
+        elif i == 5:
+            from PIL import ImageEnhance
+            img = ImageEnhance.Brightness(img).enhance(2.0)        # blown highlights
+        elif i == 8:
+            from PIL import ImageEnhance
+            img = ImageEnhance.Brightness(img).enhance(0.25)       # crushed shadows
         write_jpeg(out / f"park_burst_{i:02d}.jpg", img, ts.replace(microsecond=0), (i * 100) % 1000)
 
     # Burst 2: street, 5 frames at ~50ms apart, 30 minutes later

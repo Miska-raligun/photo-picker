@@ -4,6 +4,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use photo_pick_core::group::StageAParams;
 use photo_pick_core::ingest::ThumbnailSpec;
 use photo_pick_core::pipeline::{LinkMode, NoopProgress, Pipeline, PipelineConfig, ProgressSink, Stage};
+use photo_pick_core::scoring::TechWeights;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -133,6 +134,7 @@ fn run_scan(args: ScanArgs) -> Result<()> {
         },
         k1: args.k1,
         k2: args.k2,
+        tech_weights: TechWeights::default(),
         link_mode: args.link.into(),
         thumbnail: ThumbnailSpec::default(),
         dry_run: args.dry_run,
@@ -150,11 +152,12 @@ fn run_scan(args: ScanArgs) -> Result<()> {
 
     let verb = if args.dry_run { "would place" } else { "placed" };
     println!(
-        "Done in {:.2}s — {} photos in {} groups, {} {} in {}",
+        "Done in {:.2}s — {} photos in {} groups, {} kept / {} rejected, {} in {}",
         report.elapsed.as_secs_f64(),
         report.photo_count,
         report.group_count,
         report.picked_count,
+        report.rejected_count,
         verb,
         args.output.display(),
     );
@@ -211,6 +214,7 @@ impl ProgressSink for IndicatifProgress {
                 *self.features.lock().unwrap() = Some(pb);
             }
             Stage::Cluster => eprintln!("clustering..."),
+            Stage::Score => eprintln!("scoring + selecting..."),
             Stage::Write => {
                 let pb = ProgressBar::new(total);
                 pb.set_style(

@@ -9,6 +9,8 @@ pub struct ExifInfo {
     pub captured_at: Option<DateTime<Utc>>,
     pub burst_id: Option<String>,
     pub drive_mode: Option<DriveMode>,
+    pub iso: Option<u32>,
+    pub exposure_bias_ev: Option<f32>,
 }
 
 pub fn extract_exif_info(path: &Path) -> Result<ExifInfo, exif::Error> {
@@ -20,8 +22,32 @@ pub fn extract_exif_info(path: &Path) -> Result<ExifInfo, exif::Error> {
     let captured_at = read_datetime(&exif_data);
     let burst_id = read_burst_id(&exif_data);
     let drive_mode = read_drive_mode(&exif_data);
+    let iso = read_iso(&exif_data);
+    let exposure_bias_ev = read_exposure_bias(&exif_data);
 
-    Ok(ExifInfo { captured_at, burst_id, drive_mode })
+    Ok(ExifInfo { captured_at, burst_id, drive_mode, iso, exposure_bias_ev })
+}
+
+fn read_iso(data: &exif::Exif) -> Option<u32> {
+    use exif::{In, Tag, Value};
+    // ISOSpeedRatings (deprecated) and PhotographicSensitivity both stash ISO.
+    let f = data
+        .get_field(Tag::PhotographicSensitivity, In::PRIMARY)
+        .or_else(|| data.get_field(Tag::ISOSpeed, In::PRIMARY))?;
+    match &f.value {
+        Value::Short(v) => v.first().map(|x| *x as u32),
+        Value::Long(v) => v.first().copied(),
+        _ => None,
+    }
+}
+
+fn read_exposure_bias(data: &exif::Exif) -> Option<f32> {
+    use exif::{In, Tag, Value};
+    let f = data.get_field(Tag::ExposureBiasValue, In::PRIMARY)?;
+    match &f.value {
+        Value::SRational(v) => v.first().map(|r| r.num as f32 / r.denom as f32),
+        _ => None,
+    }
 }
 
 fn read_datetime(data: &exif::Exif) -> Option<DateTime<Utc>> {

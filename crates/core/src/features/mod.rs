@@ -1,5 +1,7 @@
+pub mod full;
 pub mod hash;
 
+pub use full::FullExtractor;
 pub use hash::HashOnlyExtractor;
 
 use crate::error::Result;
@@ -13,11 +15,13 @@ pub struct PhotoFeatures {
     pub phash: u64,
     pub dhash: u64,
 
-    // Populated starting M2; serialized as null when absent.
-    pub exposure:  Option<f32>,
-    pub wb:        Option<f32>,
-    pub sharpness: Option<f32>,
-    pub noise:     Option<f32>,
+    /// All four populated starting M2; `None` when only a hash-only extractor ran.
+    /// `sharpness_raw` is the unnormalized signal — the pipeline z-scores it per
+    /// group before producing the final tech score.
+    pub exposure:      Option<f32>,
+    pub wb:            Option<f32>,
+    pub sharpness_raw: Option<f32>,
+    pub noise:         Option<f32>,
 }
 
 impl PhotoFeatures {
@@ -28,9 +32,19 @@ impl PhotoFeatures {
             dhash,
             exposure: None,
             wb: None,
-            sharpness: None,
+            sharpness_raw: None,
             noise: None,
         }
+    }
+
+    /// Returns the raw technical scores if all four are populated.
+    pub fn raw_tech_scores(&self) -> Option<crate::scoring::RawTechScores> {
+        Some(crate::scoring::RawTechScores {
+            exposure: self.exposure?,
+            wb: self.wb?,
+            sharpness_raw: self.sharpness_raw?,
+            noise: self.noise?,
+        })
     }
 }
 

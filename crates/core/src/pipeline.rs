@@ -1,8 +1,9 @@
 use crate::error::Result;
-use crate::features::{FeatureExtractor, HashOnlyExtractor, PhotoFeatures};
+use crate::features::{FeatureExtractor, FullExtractor, PhotoFeatures};
 use crate::group::{cluster_stage_a, Group, StageAParams};
-use crate::ingest::{decode_thumbnail, FsScanner, PhotoId, PhotoRef, Scanner, ThumbnailSpec};
+use crate::ingest::{decode_thumbnail_for, FsScanner, PhotoId, PhotoRef, Scanner, ThumbnailSpec};
 use crate::output::{materialize, write_json_report};
+use crate::scoring::{select_top_k_per_group, SelectedGroup, TechWeights};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -22,6 +23,7 @@ pub enum Stage {
     Scan,
     Features,
     Cluster,
+    Score,
     Write,
 }
 
@@ -44,10 +46,9 @@ pub struct PipelineConfig {
     pub output: PathBuf,
     pub report_path: Option<PathBuf>,
     pub stage_a: StageAParams,
-    /// M1: not used; reserved for M2 technical-score top-K selection.
     pub k1: usize,
-    /// M3+: not used yet.
-    pub k2: usize,
+    pub k2: usize, // M3+: not used yet
+    pub tech_weights: TechWeights,
     pub link_mode: LinkMode,
     pub thumbnail: ThumbnailSpec,
     pub dry_run: bool,
@@ -58,6 +59,7 @@ pub struct PipelineReport {
     pub photo_count: usize,
     pub group_count: usize,
     pub picked_count: usize,
+    pub rejected_count: usize,
     pub elapsed: Duration,
 }
 
@@ -80,8 +82,8 @@ impl Pipeline {
         progress.on_finish(Stage::Scan);
         tracing::info!(count = photos.len(), "scan complete");
 
-        // 2. Feature extraction in parallel.
-        let extractor = HashOnlyExtractor::new();
+        // 2. Feature extraction (hashes + raw tech scores) in parallel.
+        let extractor = FullExtractor::new();
         let total = photos.len() as u64;
         progress.on_stage(Stage::Features, total);
         let counter = Mutex::new(0u64);
@@ -89,7 +91,7 @@ impl Pipeline {
         let features_vec: Vec<PhotoFeatures> = photos
             .par_iter()
             .filter_map(|p| {
-                let thumb = match decode_thumbnail(&p.path, self.cfg.thumbnail) {
+                let thumb = match decode_thumbnail_for(p, self.cfg.thumbnail) {
                     Ok(t) => t,
                     Err(err) => {
                         tracing::warn!(path = %p.path.display(), %err, "skipping (decode failed)");
@@ -122,27 +124,39 @@ impl Pipeline {
         progress.on_finish(Stage::Cluster);
         tracing::info!(group_count = groups.len(), "stage A complete");
 
-        // 4. Output
+        // 4. Per-group top-K1 selection
+        progress.on_stage(Stage::Score, 0);
+        let selections: Vec<SelectedGroup> =
+            select_top_k_per_group(&groups, &features, self.cfg.k1, &self.cfg.tech_weights);
+        let picked_total: usize = selections.iter().map(|s| s.kept.len()).sum();
+        let rejected_total: usize = selections.iter().map(|s| s.rejected.len()).sum();
+        progress.on_finish(Stage::Score);
+        tracing::info!(picked = picked_total, rejected = rejected_total, "selection complete");
+
+        // 5. Output
         let photos_by_id: HashMap<PhotoId, PhotoRef> =
             photos.iter().cloned().map(|p| (p.id, p)).collect();
 
-        let picked_count = if self.cfg.dry_run {
-            groups.iter().map(|g| g.photo_ids.len()).sum()
+        let (picked_count, rejected_count) = if self.cfg.dry_run {
+            (picked_total, rejected_total)
         } else {
-            progress.on_stage(Stage::Write, groups.iter().map(|g| g.photo_ids.len() as u64).sum());
-            let placed = materialize(&self.cfg.output, &photos_by_id, &groups, self.cfg.link_mode)?;
+            let write_total = (picked_total + rejected_total) as u64;
+            progress.on_stage(Stage::Write, write_total);
+            let (picked, rejected) =
+                materialize(&self.cfg.output, &photos_by_id, &selections, self.cfg.link_mode)?;
             progress.on_finish(Stage::Write);
-            placed.len()
+            (picked.len(), rejected.len())
         };
 
         if let Some(report_path) = &self.cfg.report_path {
-            write_json_report(report_path, &self.cfg.root, start.elapsed(), &photos_by_id, &groups)?;
+            write_json_report(report_path, &self.cfg.root, start.elapsed(), &photos_by_id, &selections)?;
         }
 
         Ok(PipelineReport {
             photo_count: photos.len(),
             group_count: groups.len(),
             picked_count,
+            rejected_count,
             elapsed: start.elapsed(),
         })
     }

@@ -6,5 +6,6 @@ pub mod group;
 pub mod ingest;
 pub mod output;
 pub mod pipeline;
+pub mod scoring;
 
 pub use error::{Error, Result};

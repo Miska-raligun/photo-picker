@@ -144,6 +144,8 @@ mod tests {
             sha256_short: [0; 16],
             burst_id: None,
             drive_mode: None,
+            iso: None,
+            exposure_bias_ev: None,
         }
     }
 

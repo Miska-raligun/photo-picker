@@ -1,4 +1,4 @@
-use super::{exif::extract_exif_info, ImageFormat, PhotoId, PhotoRef};
+use super::{exif::extract_exif_info, ImageFormat, PhotoId, PhotoRef, RawKind};
 use crate::error::{Error, Result};
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -58,6 +58,14 @@ fn classify(path: &Path) -> Option<ImageFormat> {
     let ext = path.extension()?.to_str()?.to_ascii_lowercase();
     match ext.as_str() {
         "jpg" | "jpeg" | "jpe" => Some(ImageFormat::Jpeg),
+        "cr2" => Some(ImageFormat::Raw(RawKind::Cr2)),
+        "cr3" => Some(ImageFormat::Raw(RawKind::Cr3)),
+        "nef" => Some(ImageFormat::Raw(RawKind::Nef)),
+        "arw" => Some(ImageFormat::Raw(RawKind::Arw)),
+        "dng" => Some(ImageFormat::Raw(RawKind::Dng)),
+        "pef" => Some(ImageFormat::Raw(RawKind::Pef)),
+        "orf" => Some(ImageFormat::Raw(RawKind::Orf)),
+        "raf" => Some(ImageFormat::Raw(RawKind::Raf)),
         _ => None,
     }
 }
@@ -84,6 +92,8 @@ fn build_photo_ref(path: PathBuf, format: ImageFormat) -> Result<PhotoRef> {
         sha256_short,
         burst_id: exif_info.burst_id,
         drive_mode: exif_info.drive_mode,
+        iso: exif_info.iso,
+        exposure_bias_ev: exif_info.exposure_bias_ev,
     })
 }
 
