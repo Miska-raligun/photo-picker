@@ -64,6 +64,10 @@ struct ScanArgs {
     #[arg(long)]
     no_clip: bool,
 
+    /// Disable face detection (skip YuNet; scenes default to landscape).
+    #[arg(long)]
+    no_face: bool,
+
     /// Stage A maximum pHash Hamming distance.
     #[arg(long, default_value_t = 6)]
     hash_dist: u32,
@@ -187,6 +191,7 @@ fn run_scan(args: ScanArgs) -> Result<()> {
         thumbnail: ThumbnailSpec::default(),
         dry_run: args.dry_run,
         enable_clip: !args.no_clip,
+        enable_face: !args.no_face,
         execution_provider: ExecutionProvider::Cpu,
     };
 

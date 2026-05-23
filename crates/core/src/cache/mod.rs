@@ -17,7 +17,9 @@ use std::path::Path;
 
 /// Bumped when the on-disk feature representation changes incompatibly. Older
 /// rows are ignored (and silently re-extracted on next run).
-pub const FEATURE_SCHEMA_VERSION: i64 = 1;
+/// - v1: M4.1 initial (technical scores + CLIP embed + face stub data)
+/// - v2: M3.5-real YuNet face detection wired in — old rows have empty face data
+pub const FEATURE_SCHEMA_VERSION: i64 = 2;
 
 pub struct CacheStore {
     conn: Connection,

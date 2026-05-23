@@ -10,6 +10,7 @@ pub mod aesthetic;
 pub mod composition;
 pub mod exposure;
 pub mod face;
+pub mod face_yunet;
 pub mod noise;
 pub mod scene;
 pub mod sharpness;
@@ -18,6 +19,7 @@ pub mod wb;
 pub use aesthetic::{AestheticScorer, NeutralAestheticStub};
 pub use composition::{CompositionScorer, NeutralCompositionStub};
 pub use face::{FaceBox, FaceDetector, FaceInfo, NoFaceDetectorStub};
+pub use face_yunet::YunetFaceDetector;
 pub use scene::{classify_scene, FinalWeights, Scene};
 
 use crate::features::PhotoFeatures;

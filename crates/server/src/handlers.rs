@@ -42,6 +42,8 @@ pub struct ScanRequest {
     pub stage_b_threshold: f32,
     #[serde(default = "default_clip")]
     pub enable_clip: bool,
+    #[serde(default = "default_face")]
+    pub enable_face: bool,
 }
 
 fn default_k1() -> usize { 3 }
@@ -52,6 +54,7 @@ fn default_max_dt() -> f32 { 30.0 }
 fn default_hash_dist() -> u32 { 6 }
 fn default_threshold() -> f32 { 0.93 }
 fn default_clip() -> bool { true }
+fn default_face() -> bool { true }
 
 /// Kick off a scan in the blocking pool. Returns immediately with the run id;
 /// poll `/api/runs/{id}` to follow status.
@@ -105,6 +108,7 @@ pub async fn scan(
             thumbnail: ThumbnailSpec::default(),
             dry_run: false,
             enable_clip: req_for_task.enable_clip,
+            enable_face: req_for_task.enable_face,
             execution_provider: ExecutionProvider::Cpu,
         };
         let pipeline = Pipeline::new(cfg);

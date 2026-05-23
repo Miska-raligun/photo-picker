@@ -4,6 +4,7 @@ use crate::features::{FeatureExtractor, FullExtractor, PhotoFeatures};
 use crate::group::{cluster_stage_a, cluster_stage_b, CompositionGroup, Group, StageAParams, StageBParams};
 use crate::ingest::{decode_thumbnail_for, FsScanner, PhotoId, PhotoRef, Scanner, ThumbnailSpec};
 use crate::models::{ClipEncoder, ExecutionProvider};
+use crate::scoring::YunetFaceDetector;
 use crate::output::{materialize, plan_output, write_html_report, write_json_report};
 use crate::scoring::{
     select_top_k_per_composition, select_top_k_per_group, CompositionPick, SelectedGroup,
@@ -64,6 +65,7 @@ pub struct PipelineConfig {
     pub thumbnail: ThumbnailSpec,
     pub dry_run: bool,
     pub enable_clip: bool,
+    pub enable_face: bool,
     pub execution_provider: ExecutionProvider,
 }
 
@@ -169,7 +171,18 @@ impl Pipeline {
             };
             clip_enabled = clip.is_some();
 
-            let extractor = FullExtractor::new(clip);
+            let mut extractor = FullExtractor::new(clip);
+            if self.cfg.enable_face {
+                match YunetFaceDetector::load(self.cfg.execution_provider) {
+                    Ok(d) => {
+                        tracing::info!("YuNet face detector loaded");
+                        extractor = extractor.with_face_detector(Box::new(d));
+                    }
+                    Err(err) => {
+                        tracing::warn!(%err, "YuNet load failed; continuing without face detection");
+                    }
+                }
+            }
             progress.on_stage(Stage::Features, extract_count as u64);
             let counter = Mutex::new(0u64);
 
