@@ -80,6 +80,14 @@ struct ScanArgs {
     #[arg(long)]
     report: Option<PathBuf>,
 
+    /// Write a self-contained HTML report to this path (default: <output>/report.html).
+    #[arg(long)]
+    html_report: Option<PathBuf>,
+
+    /// Skip the HTML report (otherwise generated alongside the JSON one).
+    #[arg(long)]
+    no_html: bool,
+
     /// Increase log verbosity (-v, -vv).
     #[arg(short, action = clap::ArgAction::Count)]
     verbose: u8,
@@ -130,11 +138,23 @@ fn run_scan(args: ScanArgs) -> Result<()> {
             Some(args.output.join("report.json"))
         }
     });
+    let html_report_path = if args.no_html {
+        None
+    } else {
+        args.html_report.clone().or_else(|| {
+            if args.dry_run {
+                None
+            } else {
+                Some(args.output.join("report.html"))
+            }
+        })
+    };
 
     let cfg = PipelineConfig {
         root: args.root.clone(),
         output: args.output.clone(),
         report_path,
+        html_report_path,
         stage_a: StageAParams {
             k_time: args.time_k,
             min_dt: Duration::from_secs_f32(args.min_dt),
@@ -166,18 +186,18 @@ fn run_scan(args: ScanArgs) -> Result<()> {
 
     let verb = if args.dry_run { "would place" } else { "placed" };
     let stage_b_note = if report.stage_b_group_count > 0 {
-        format!(", {} composition groups", report.stage_b_group_count)
+        format!(" → {} composition groups", report.stage_b_group_count)
     } else {
         String::new()
     };
     println!(
-        "Done in {:.2}s — {} photos in {} groups, {} kept / {} rejected{}, {} in {}",
+        "Done in {:.2}s — {} photos in {} bursts{}, {} kept / {} rejected, {} in {}",
         report.elapsed.as_secs_f64(),
         report.photo_count,
-        report.group_count,
+        report.stage_a_group_count,
+        stage_b_note,
         report.picked_count,
         report.rejected_count,
-        stage_b_note,
         verb,
         args.output.display(),
     );
@@ -236,6 +256,7 @@ impl ProgressSink for IndicatifProgress {
             Stage::Cluster => eprintln!("stage A (time + hash) clustering..."),
             Stage::Score => eprintln!("scoring + selecting top-K1..."),
             Stage::StageB => eprintln!("stage B (CLIP composition) clustering..."),
+            Stage::FinalSelect => eprintln!("final scene-aware K2 selection..."),
             Stage::Write => {
                 let pb = ProgressBar::new(total);
                 pb.set_style(

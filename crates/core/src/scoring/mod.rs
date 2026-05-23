@@ -6,13 +6,22 @@
 //! sharpest one in this burst" matters more than absolute Laplacian variance,
 //! which depends on subject and lighting.
 
+pub mod aesthetic;
+pub mod composition;
 pub mod exposure;
+pub mod face;
 pub mod noise;
+pub mod scene;
 pub mod sharpness;
 pub mod wb;
 
+pub use aesthetic::{AestheticScorer, NeutralAestheticStub};
+pub use composition::{CompositionScorer, NeutralCompositionStub};
+pub use face::{FaceBox, FaceDetector, FaceInfo, NoFaceDetectorStub};
+pub use scene::{classify_scene, FinalWeights, Scene};
+
 use crate::features::PhotoFeatures;
-use crate::group::Group;
+use crate::group::{CompositionGroup, Group};
 use crate::ingest::{PhotoId, PhotoRef};
 use image::DynamicImage;
 use serde::{Deserialize, Serialize};
@@ -56,6 +65,67 @@ pub struct TechScore {
     pub sharpness: f32,
     pub noise: f32,
     pub tech: f32,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct FinalScore {
+    pub scene: Scene,
+    pub tech: f32,
+    pub aesthetic: f32,
+    pub composition: f32,
+    pub face_bonus: f32,
+    /// Final weighted score in `[0, 1]`.
+    pub value: f32,
+}
+
+/// Plan B.7 face bonus:
+///   `face_quality_f = 0.3·size + 0.4·eye + 0.2·sharp + 0.1·smile`
+///   `face_bonus = mean(face_quality_f) · coverage`
+/// `coverage` is 1.0 when at least `ceil(N·0.8)` faces have `eye_open > 0.5`,
+/// otherwise the fraction of open-eye faces (avoids hard-zeroing big groups).
+pub fn face_bonus_score(face: &FaceInfo) -> f32 {
+    let n = face.count();
+    if n == 0 {
+        return 0.0;
+    }
+    let mut total = 0.0_f32;
+    let mut open_count = 0;
+    for f in &face.faces {
+        let size = (f.area_ratio() / 0.05).clamp(0.0, 1.0);
+        let eye = f.eye_open_prob.unwrap_or(0.5);
+        let smile = f.smile_prob.unwrap_or(0.5);
+        let sharp = f.local_sharpness.unwrap_or(0.5);
+        let q = 0.3 * size + 0.4 * eye.clamp(0.0, 1.0) + 0.2 * sharp.clamp(0.0, 1.0) + 0.1 * smile.clamp(0.0, 1.0);
+        total += q;
+        if eye > 0.5 {
+            open_count += 1;
+        }
+    }
+    let need = ((n as f32) * 0.8).ceil() as usize;
+    let coverage = if open_count >= need { 1.0 } else { open_count as f32 / n as f32 };
+    (total / n as f32 * coverage).clamp(0.0, 1.0)
+}
+
+pub fn compute_final_score(
+    tech: f32,
+    aesthetic: f32,
+    composition: f32,
+    face: &FaceInfo,
+) -> FinalScore {
+    let scene = classify_scene(face);
+    let w = FinalWeights::for_scene(scene);
+    let fb = face_bonus_score(face);
+    let value =
+        (w.tech * tech + w.aesthetic * aesthetic + w.composition * composition + w.face_bonus * fb)
+            .clamp(0.0, 1.0);
+    FinalScore {
+        scene,
+        tech,
+        aesthetic,
+        composition,
+        face_bonus: fb,
+        value,
+    }
 }
 
 pub fn compute_raw_scores(thumb: &DynamicImage, photo: &PhotoRef) -> RawTechScores {
@@ -124,6 +194,52 @@ pub struct SelectedGroup {
     pub kept: Vec<(PhotoId, TechScore)>,
     /// Remaining photos sorted by tech score (descending) — kept for the report.
     pub rejected: Vec<(PhotoId, TechScore)>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CompositionPick {
+    pub group: CompositionGroup,
+    /// Top-K2 photos by final score (descending). First entry is the new
+    /// "representative" pick.
+    pub kept: Vec<(PhotoId, FinalScore)>,
+    /// Stage A kept photos that lost the composition contest to a better
+    /// peer in the same Stage B group.
+    pub rejected: Vec<(PhotoId, FinalScore)>,
+}
+
+/// For each composition group, compute the final scene-aware score and pick K2.
+pub fn select_top_k_per_composition(
+    composition_groups: &[CompositionGroup],
+    features: &HashMap<PhotoId, PhotoFeatures>,
+    tech_scores: &HashMap<PhotoId, TechScore>,
+    k2: usize,
+) -> Vec<CompositionPick> {
+    composition_groups
+        .iter()
+        .map(|cg| {
+            let mut ranked: Vec<(PhotoId, FinalScore)> = cg
+                .photo_ids
+                .iter()
+                .filter_map(|pid| {
+                    let f = features.get(pid)?;
+                    let t = tech_scores.get(pid)?;
+                    let aesthetic = f.aesthetic.unwrap_or(0.5);
+                    let composition = f.composition.unwrap_or(0.5);
+                    let face = f.face.clone().unwrap_or_default();
+                    let fs = compute_final_score(t.tech, aesthetic, composition, &face);
+                    Some((*pid, fs))
+                })
+                .collect();
+            ranked.sort_by(|a, b| b.1.value.partial_cmp(&a.1.value).unwrap_or(Ordering::Equal));
+            let k = k2.min(ranked.len());
+            let rejected = ranked.split_off(k);
+            CompositionPick {
+                group: cg.clone(),
+                kept: ranked,
+                rejected,
+            }
+        })
+        .collect()
 }
 
 /// For each group, rank photos by tech score and split into kept/rejected at K1.

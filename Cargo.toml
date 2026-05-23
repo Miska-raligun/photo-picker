@@ -37,6 +37,7 @@ ndarray           = "0.17"
 ureq              = { version = "3", default-features = false, features = ["rustls"] }
 dirs              = "6"
 hex               = "0.4"
+base64            = "0.22"
 
 [profile.release]
 lto           = "thin"

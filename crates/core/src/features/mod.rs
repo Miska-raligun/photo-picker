@@ -28,6 +28,13 @@ pub struct PhotoFeatures {
     /// to humans; recompute from the cache if you need it.
     #[serde(skip)]
     pub clip_embed: Option<Vec<f32>>,
+
+    /// Aesthetic score in `[0, 1]` (M3.4 stub returns 0.5 for now).
+    pub aesthetic: Option<f32>,
+    /// Composition score in `[0, 1]` (M3.6 stub returns 0.5 for now).
+    pub composition: Option<f32>,
+    /// Face detection result (M3.5 stub returns empty for now).
+    pub face: Option<crate::scoring::FaceInfo>,
 }
 
 impl PhotoFeatures {
@@ -41,6 +48,9 @@ impl PhotoFeatures {
             sharpness_raw: None,
             noise: None,
             clip_embed: None,
+            aesthetic: None,
+            composition: None,
+            face: None,
         }
     }
 
