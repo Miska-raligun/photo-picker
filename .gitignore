@@ -1,0 +1,28 @@
+/target
+**/*.rs.bk
+Cargo.lock.bak
+
+# Generated test fixtures (re-create via scripts/make_fixtures.py)
+/tests/fixtures/sample/
+
+# Per-user Claude settings (not project state)
+/.claude/
+
+# Output / runtime
+/picked/
+/output/
+*.db
+*.db-journal
+
+# Models (M3+, externally distributed)
+/models/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,25 @@
+[package]
+name         = "photo-pick-core"
+version      = { workspace = true }
+edition      = { workspace = true }
+rust-version = { workspace = true }
+license      = { workspace = true }
+
+[lib]
+name = "photo_pick_core"
+path = "src/lib.rs"
+
+[dependencies]
+image             = { workspace = true }
+image_hasher      = { workspace = true }
+fast_image_resize = { workspace = true }
+kamadak-exif      = { workspace = true }
+walkdir           = { workspace = true }
+rayon             = { workspace = true }
+chrono            = { workspace = true }
+sha2              = { workspace = true }
+uuid              = { workspace = true }
+serde             = { workspace = true }
+serde_json        = { workspace = true }
+thiserror         = { workspace = true }
+tracing           = { workspace = true }

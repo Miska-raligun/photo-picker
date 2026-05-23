@@ -1,0 +1,19 @@
+[package]
+name         = "photo-pick"
+version      = { workspace = true }
+edition      = { workspace = true }
+rust-version = { workspace = true }
+license      = { workspace = true }
+
+[[bin]]
+name = "photo-pick"
+path = "src/main.rs"
+
+[dependencies]
+photo-pick-core    = { path = "../core" }
+clap               = { workspace = true }
+anyhow             = { workspace = true }
+tracing            = { workspace = true }
+tracing-subscriber = { workspace = true }
+indicatif          = { workspace = true }
+rayon              = { workspace = true }
