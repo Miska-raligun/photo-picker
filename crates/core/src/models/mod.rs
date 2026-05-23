@@ -12,7 +12,9 @@
 //! warning log.
 
 pub mod cache;
+pub mod clip;
 pub mod registry;
 
 pub use cache::{ensure_model, ModelDescriptor};
+pub use clip::{ClipEncoder, CLIP_EMBED_DIM};
 pub use registry::ExecutionProvider;
