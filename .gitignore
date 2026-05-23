@@ -8,6 +8,9 @@ Cargo.lock.bak
 # Per-user Claude settings (not project state)
 /.claude/
 
+# Vendored onnxruntime binary (fetched via scripts/fetch_onnxruntime.sh)
+/vendor/
+
 # Output / runtime
 /picked/
 /output/

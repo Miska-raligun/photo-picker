@@ -1,0 +1,7 @@
+[env]
+# ort-sys 2.0.0-rc.12 picks up the onnxruntime static library from this path
+# when `download-binaries` is disabled. The library was fetched once with:
+#   curl -L -o vendor/onnxruntime.tar.lzma2 \
+#     https://cdn.pyke.io/0/pyke:ort-rs/ms@1.24.2/x86_64-unknown-linux-gnu.tar.lzma2
+#   python3 -c '...' (raw LZMA2 → tar, see scripts/fetch_onnxruntime.sh)
+ORT_LIB_LOCATION = { value = "vendor/onnxruntime", relative = true }

@@ -9,6 +9,12 @@ license      = { workspace = true }
 name = "photo_pick_core"
 path = "src/lib.rs"
 
+[features]
+default  = []
+cuda     = []
+coreml   = []
+directml = []
+
 [dependencies]
 image             = { workspace = true }
 image_hasher      = { workspace = true }
@@ -23,3 +29,8 @@ serde             = { workspace = true }
 serde_json        = { workspace = true }
 thiserror         = { workspace = true }
 tracing           = { workspace = true }
+ort               = { workspace = true }
+ndarray           = { workspace = true }
+ureq              = { workspace = true }
+dirs              = { workspace = true }
+hex               = { workspace = true }
