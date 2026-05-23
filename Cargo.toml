@@ -40,6 +40,11 @@ hex               = "0.4"
 base64            = "0.22"
 rusqlite          = { version = "0.32", features = ["bundled"] }
 bytemuck          = "1"
+# Server stack (M4+)
+axum              = "0.7"
+tokio             = { version = "1", features = ["rt-multi-thread", "macros", "fs", "sync"] }
+tower             = "0.5"
+tower-http        = { version = "0.6", features = ["trace", "cors"] }
 
 [profile.release]
 lto           = "thin"

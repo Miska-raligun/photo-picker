@@ -67,7 +67,7 @@ pub struct PipelineConfig {
     pub execution_provider: ExecutionProvider,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct PipelineReport {
     pub photo_count: usize,
     pub cached_count: usize,
