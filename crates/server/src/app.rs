@@ -12,6 +12,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/runs", get(handlers::list_runs))
         .route("/api/runs/:id", get(handlers::get_run))
         .route("/api/runs/:id/html", get(handlers::get_run_html))
+        .route("/api/runs/:id/thumb/:photo_id", get(handlers::get_thumb))
         .route("/api/runs/:id/explain", post(handlers::explain))
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())

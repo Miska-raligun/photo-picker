@@ -134,9 +134,96 @@ pub async fn get_run(
     Path(id): Path<String>,
 ) -> impl IntoResponse {
     let guard = state.runs.lock().await;
-    match guard.get(&id) {
-        Some(rec) => Json(serde_json::to_value(rec).unwrap()).into_response(),
-        None => (StatusCode::NOT_FOUND, "run not found").into_response(),
+    let Some(rec) = guard.get(&id) else {
+        return (StatusCode::NOT_FOUND, "run not found").into_response();
+    };
+
+    let mut resp = serde_json::to_value(rec).unwrap();
+
+    let picks_view: Vec<serde_json::Value> = rec
+        .composition_picks
+        .iter()
+        .enumerate()
+        .map(|(idx, cp)| {
+            let scene = cp
+                .kept
+                .first()
+                .or_else(|| cp.rejected.first())
+                .map(|(_, fs)| match fs.scene {
+                    photo_pick_core::scoring::Scene::Portrait => "portrait",
+                    photo_pick_core::scoring::Scene::Landscape => "landscape",
+                    photo_pick_core::scoring::Scene::Mixed => "mixed",
+                })
+                .unwrap_or("unknown");
+            serde_json::json!({
+                "index": idx,
+                "id": cp.group.id.0.to_string(),
+                "scene": scene,
+                "kept": cp.kept.iter().map(|(pid, fs)| photo_view(rec, pid, Some(*fs))).collect::<Vec<_>>(),
+                "rejected": cp.rejected.iter().map(|(pid, fs)| photo_view(rec, pid, Some(*fs))).collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+    resp["composition_picks"] = serde_json::Value::Array(picks_view);
+
+    Json(resp).into_response()
+}
+
+fn photo_view(
+    rec: &RunRecord,
+    pid: &photo_pick_core::ingest::PhotoId,
+    final_score: Option<photo_pick_core::scoring::FinalScore>,
+) -> serde_json::Value {
+    let p = rec.photos.get(pid);
+    serde_json::json!({
+        "photo_id": pid.0.to_string(),
+        "filename": p.and_then(|p| p.path.file_name().map(|n| n.to_string_lossy().to_string())),
+        "captured_at": p.and_then(|p| p.captured_at),
+        "iso": p.and_then(|p| p.iso),
+        "final_score": final_score,
+    })
+}
+
+/// Stream a small JPEG thumbnail of the requested photo (256px long edge).
+pub async fn get_thumb(
+    State(state): State<AppState>,
+    Path((run_id, photo_id)): Path<(String, String)>,
+) -> impl IntoResponse {
+    let parsed = match Uuid::parse_str(&photo_id) {
+        Ok(u) => u,
+        Err(_) => return (StatusCode::BAD_REQUEST, "bad photo id").into_response(),
+    };
+    let pid = photo_pick_core::ingest::PhotoId(parsed);
+
+    let photo_ref = {
+        let guard = state.runs.lock().await;
+        let Some(rec) = guard.get(&run_id) else {
+            return (StatusCode::NOT_FOUND, "run not found").into_response();
+        };
+        match rec.photos.get(&pid) {
+            Some(p) => p.clone(),
+            None => return (StatusCode::NOT_FOUND, "photo not in run").into_response(),
+        }
+    };
+
+    let result = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, String> {
+        let img = decode_thumbnail_for(&photo_ref, ThumbnailSpec { long_edge: 256 })
+            .map_err(|e| e.to_string())?;
+        encode_jpeg(&img, 75).map_err(|e| e.to_string())
+    })
+    .await;
+
+    match result {
+        Ok(Ok(bytes)) => (
+            [
+                ("content-type", "image/jpeg".to_string()),
+                ("cache-control", "max-age=3600".to_string()),
+            ],
+            bytes,
+        )
+            .into_response(),
+        Ok(Err(msg)) => (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("task: {e}")).into_response(),
     }
 }
 
