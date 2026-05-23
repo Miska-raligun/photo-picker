@@ -15,6 +15,9 @@ cuda     = []
 coreml   = []
 directml = []
 
+[dev-dependencies]
+tempfile = "3"
+
 [dependencies]
 image             = { workspace = true }
 image_hasher      = { workspace = true }
@@ -35,3 +38,5 @@ ureq              = { workspace = true }
 dirs              = { workspace = true }
 hex               = { workspace = true }
 base64            = { workspace = true }
+rusqlite          = { workspace = true }
+bytemuck          = { workspace = true }

@@ -88,6 +88,15 @@ struct ScanArgs {
     #[arg(long)]
     no_html: bool,
 
+    /// Feature cache path (default: <output>/.cache.db). Re-runs against the
+    /// same directory reuse cached features and skip extraction.
+    #[arg(long)]
+    cache_db: Option<PathBuf>,
+
+    /// Disable the feature cache entirely (always re-extract).
+    #[arg(long)]
+    no_cache: bool,
+
     /// Increase log verbosity (-v, -vv).
     #[arg(short, action = clap::ArgAction::Count)]
     verbose: u8,
@@ -150,11 +159,18 @@ fn run_scan(args: ScanArgs) -> Result<()> {
         })
     };
 
+    let cache_path = if args.no_cache {
+        None
+    } else {
+        Some(args.cache_db.clone().unwrap_or_else(|| args.output.join(".cache.db")))
+    };
+
     let cfg = PipelineConfig {
         root: args.root.clone(),
         output: args.output.clone(),
         report_path,
         html_report_path,
+        cache_path,
         stage_a: StageAParams {
             k_time: args.time_k,
             min_dt: Duration::from_secs_f32(args.min_dt),
@@ -190,10 +206,16 @@ fn run_scan(args: ScanArgs) -> Result<()> {
     } else {
         String::new()
     };
+    let cache_note = if report.cached_count > 0 {
+        format!(" (cache hit {}/{})", report.cached_count, report.photo_count)
+    } else {
+        String::new()
+    };
     println!(
-        "Done in {:.2}s — {} photos in {} bursts{}, {} kept / {} rejected, {} in {}",
+        "Done in {:.2}s — {} photos{} in {} bursts{}, {} kept / {} rejected, {} in {}",
         report.elapsed.as_secs_f64(),
         report.photo_count,
+        cache_note,
         report.stage_a_group_count,
         stage_b_note,
         report.picked_count,

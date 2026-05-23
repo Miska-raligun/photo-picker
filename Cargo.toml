@@ -38,6 +38,8 @@ ureq              = { version = "3", default-features = false, features = ["rust
 dirs              = "6"
 hex               = "0.4"
 base64            = "0.22"
+rusqlite          = { version = "0.32", features = ["bundled"] }
+bytemuck          = "1"
 
 [profile.release]
 lto           = "thin"

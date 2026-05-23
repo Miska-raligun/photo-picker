@@ -1,5 +1,6 @@
 //! photo-pick core: ingest → features → group → output.
 
+pub mod cache;
 pub mod error;
 pub mod features;
 pub mod group;

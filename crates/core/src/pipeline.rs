@@ -1,3 +1,4 @@
+use crate::cache::CacheStore;
 use crate::error::Result;
 use crate::features::{FeatureExtractor, FullExtractor, PhotoFeatures};
 use crate::group::{cluster_stage_a, cluster_stage_b, CompositionGroup, Group, StageAParams, StageBParams};
@@ -52,6 +53,8 @@ pub struct PipelineConfig {
     pub output: PathBuf,
     pub report_path: Option<PathBuf>,
     pub html_report_path: Option<PathBuf>,
+    /// SQLite cache path. `None` disables caching entirely.
+    pub cache_path: Option<PathBuf>,
     pub stage_a: StageAParams,
     pub stage_b: StageBParams,
     pub k1: usize,
@@ -67,6 +70,8 @@ pub struct PipelineConfig {
 #[derive(Debug, Serialize)]
 pub struct PipelineReport {
     pub photo_count: usize,
+    pub cached_count: usize,
+    pub extracted_count: usize,
     pub stage_a_group_count: usize,
     pub stage_b_group_count: usize,
     pub picked_count: usize,
@@ -93,57 +98,110 @@ impl Pipeline {
         progress.on_finish(Stage::Scan);
         tracing::info!(count = photos.len(), "scan complete");
 
-        // 2. Feature extraction
-        let clip = if self.cfg.enable_clip {
-            match ClipEncoder::load(self.cfg.execution_provider) {
-                Ok(e) => {
-                    tracing::info!("CLIP encoder loaded");
-                    Some(e)
+        // 2a. Open the cache, look up features by content hash. Photos we
+        //     already know about get attached features now; the rest go to the
+        //     parallel extraction phase below.
+        let cache = match &self.cfg.cache_path {
+            Some(p) => match CacheStore::open(p) {
+                Ok(c) => {
+                    tracing::info!(path = %p.display(), "cache opened");
+                    Some(c)
                 }
                 Err(err) => {
-                    tracing::warn!(%err, "CLIP load failed; continuing without Stage B");
+                    tracing::warn!(%err, "cache disabled (open failed)");
                     None
+                }
+            },
+            None => None,
+        };
+
+        let mut features: HashMap<PhotoId, PhotoFeatures> = HashMap::new();
+        let mut to_extract: Vec<&PhotoRef> = Vec::with_capacity(photos.len());
+        if let Some(c) = &cache {
+            for p in &photos {
+                match c.get(&p.sha256_short, p.id) {
+                    Ok(Some(feat)) => {
+                        features.insert(p.id, feat);
+                    }
+                    Ok(None) => to_extract.push(p),
+                    Err(err) => {
+                        tracing::warn!(path = %p.path.display(), %err, "cache lookup failed; will re-extract");
+                        to_extract.push(p);
+                    }
                 }
             }
         } else {
-            None
+            to_extract.extend(photos.iter());
+        }
+        let cached_count = features.len();
+        let extract_count = to_extract.len();
+        tracing::info!(cached = cached_count, to_extract = extract_count, "cache lookup complete");
+
+        // 2b. Parallel feature extraction for cache misses.
+        let clip_enabled;
+        let extracted_pairs: Vec<(PhotoId, [u8; 16], PhotoFeatures)> = if to_extract.is_empty() {
+            clip_enabled = cache.is_some()
+                && features.values().any(|f| f.clip_embed.is_some());
+            vec![]
+        } else {
+            let clip = if self.cfg.enable_clip {
+                match ClipEncoder::load(self.cfg.execution_provider) {
+                    Ok(e) => {
+                        tracing::info!("CLIP encoder loaded");
+                        Some(e)
+                    }
+                    Err(err) => {
+                        tracing::warn!(%err, "CLIP load failed; continuing without Stage B");
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+            clip_enabled = clip.is_some();
+
+            let extractor = FullExtractor::new(clip);
+            progress.on_stage(Stage::Features, extract_count as u64);
+            let counter = Mutex::new(0u64);
+
+            let pairs: Vec<(PhotoId, [u8; 16], PhotoFeatures)> = to_extract
+                .par_iter()
+                .filter_map(|p| {
+                    let thumb = match decode_thumbnail_for(p, self.cfg.thumbnail) {
+                        Ok(t) => t,
+                        Err(err) => {
+                            tracing::warn!(path = %p.path.display(), %err, "skipping (decode failed)");
+                            return None;
+                        }
+                    };
+                    let feat = match extractor.extract(p, &thumb) {
+                        Ok(f) => f,
+                        Err(err) => {
+                            tracing::warn!(path = %p.path.display(), %err, "skipping (feature failed)");
+                            return None;
+                        }
+                    };
+                    let mut c = counter.lock().unwrap();
+                    *c += 1;
+                    progress.on_tick(Stage::Features, *c);
+                    Some((p.id, p.sha256_short, feat))
+                })
+                .collect();
+            progress.on_finish(Stage::Features);
+            pairs
         };
-        let clip_enabled = clip.is_some();
 
-        let extractor = FullExtractor::new(clip);
-        let total = photos.len() as u64;
-        progress.on_stage(Stage::Features, total);
-        let counter = Mutex::new(0u64);
-
-        let features_vec: Vec<PhotoFeatures> = photos
-            .par_iter()
-            .filter_map(|p| {
-                let thumb = match decode_thumbnail_for(p, self.cfg.thumbnail) {
-                    Ok(t) => t,
-                    Err(err) => {
-                        tracing::warn!(path = %p.path.display(), %err, "skipping (decode failed)");
-                        return None;
-                    }
-                };
-                let feat = match extractor.extract(p, &thumb) {
-                    Ok(f) => f,
-                    Err(err) => {
-                        tracing::warn!(path = %p.path.display(), %err, "skipping (feature failed)");
-                        return None;
-                    }
-                };
-                let mut c = counter.lock().unwrap();
-                *c += 1;
-                progress.on_tick(Stage::Features, *c);
-                Some(feat)
-            })
-            .collect();
-        progress.on_finish(Stage::Features);
-
-        let features: HashMap<PhotoId, PhotoFeatures> = features_vec
-            .into_iter()
-            .map(|f| (f.photo_id, f))
-            .collect();
+        // 2c. Persist newly extracted features back into the cache.
+        if let Some(c) = &cache {
+            for (_, sha, feat) in &extracted_pairs {
+                if let Err(err) = c.put(sha, feat) {
+                    tracing::warn!(%err, "cache write failed");
+                }
+            }
+        }
+        for (id, _, feat) in extracted_pairs {
+            features.insert(id, feat);
+        }
 
         // 3. Stage A clustering
         progress.on_stage(Stage::Cluster, 0);
@@ -239,6 +297,8 @@ impl Pipeline {
 
         Ok(PipelineReport {
             photo_count: photos.len(),
+            cached_count,
+            extracted_count: extract_count,
             stage_a_group_count: groups.len(),
             stage_b_group_count: stage_b_groups.len(),
             picked_count,
