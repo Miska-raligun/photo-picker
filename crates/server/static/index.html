@@ -55,6 +55,15 @@ button:disabled { background: #bbb; cursor: wait; }
 .run a.report { color: var(--accent); text-decoration: none; font-size: 0.9rem; }
 .run a.report:hover { text-decoration: underline; }
 .error { color: var(--error); font-family: monospace; font-size: 0.8rem; white-space: pre-wrap; }
+.explain { margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px dashed var(--border); }
+.explain-row { display: flex; gap: 0.4rem; align-items: center; margin-bottom: 0.5rem; flex-wrap: wrap; }
+.explain-row input, .explain-row select { padding: 0.3rem 0.5rem; font-size: 0.85rem; }
+.explain-row button { padding: 0.3rem 0.8rem; font-size: 0.85rem; }
+.explanation {
+  background: #f5f5f5; border-left: 3px solid var(--accent); padding: 0.6rem 0.8rem;
+  margin-top: 0.5rem; font-size: 0.85rem; white-space: pre-wrap;
+}
+.explanation .who { color: var(--muted); font-size: 0.75rem; margin-bottom: 0.3rem; }
 </style>
 </head>
 <body>
@@ -154,8 +163,53 @@ function renderRun(id, data) {
     <div class="meta">${escapeHtml(meta.root || data.root || '')} → ${escapeHtml(meta.output || data.output || '')}</div>
     ${report ? renderStats(report) : ''}
     ${state === 'completed' ? `<a class="report" href="/api/runs/${id}/html" target="_blank">open full HTML report →</a>` : ''}
+    ${state === 'completed' && report?.stage_b_group_count > 0 ? renderExplainPanel(id, report) : ''}
     ${error ? `<div class="error">${escapeHtml(error)}</div>` : ''}
   `;
+}
+
+function renderExplainPanel(runId, report) {
+  const options = [];
+  for (let i = 0; i < report.stage_b_group_count; i++) {
+    options.push(`<option value="${i}">composition #${i}</option>`);
+  }
+  return `<div class="explain">
+    <div class="explain-row">
+      <strong>Ask VLM:</strong>
+      <select id="exp-comp-${runId}">${options.join('')}</select>
+      <select id="exp-prov-${runId}">
+        <option value="openai">openai</option>
+        <option value="anthropic">anthropic</option>
+      </select>
+      <button onclick="askExplain('${runId}')">explain →</button>
+    </div>
+    <div id="exp-out-${runId}"></div>
+  </div>`;
+}
+
+async function askExplain(runId) {
+  const compIdx = parseInt(document.getElementById('exp-comp-' + runId).value);
+  const provider = document.getElementById('exp-prov-' + runId).value;
+  const out = document.getElementById('exp-out-' + runId);
+  out.innerHTML = '<div class="explanation"><div class="who">waiting on ' + escapeHtml(provider) + '...</div></div>';
+  try {
+    const resp = await fetch('/api/runs/' + runId + '/explain', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ composition_index: compIdx, provider }),
+    });
+    const text = await resp.text();
+    if (!resp.ok) {
+      out.innerHTML = '<div class="error">' + escapeHtml(text) + '</div>';
+      return;
+    }
+    const data = JSON.parse(text);
+    out.innerHTML = '<div class="explanation"><div class="who">' +
+      escapeHtml(data.provider) + ' / ' + escapeHtml(data.model) +
+      '</div>' + escapeHtml(data.text) + '</div>';
+  } catch (err) {
+    out.innerHTML = '<div class="error">' + escapeHtml(err.toString()) + '</div>';
+  }
 }
 
 function renderStats(r) {

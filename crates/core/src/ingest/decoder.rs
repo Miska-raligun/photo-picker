@@ -130,6 +130,15 @@ fn first_long(v: &exif::Value) -> Option<u64> {
     }
 }
 
+/// Encode an in-memory image to JPEG bytes at the given quality (0-100).
+pub fn encode_jpeg(img: &DynamicImage, quality: u8) -> Result<Vec<u8>> {
+    let mut buf = Vec::with_capacity(40_000);
+    let enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, quality);
+    img.write_with_encoder(enc)
+        .map_err(|e| Error::Config(format!("jpeg encode: {e}")))?;
+    Ok(buf)
+}
+
 fn downscale(img: DynamicImage, long_edge: u32) -> DynamicImage {
     let (w, h) = (img.width(), img.height());
     let longest = w.max(h);

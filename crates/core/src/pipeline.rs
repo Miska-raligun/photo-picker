@@ -79,6 +79,15 @@ pub struct PipelineReport {
     pub elapsed: Duration,
 }
 
+/// Full pipeline output. The CLI cares only about `report`; the server uses
+/// `composition_picks` + `photos` to drive the VLM "explain group" feature.
+pub struct PipelineOutput {
+    pub report: PipelineReport,
+    pub stage_a_picks: Vec<SelectedGroup>,
+    pub composition_picks: Vec<CompositionPick>,
+    pub photos: HashMap<PhotoId, PhotoRef>,
+}
+
 pub struct Pipeline {
     cfg: PipelineConfig,
 }
@@ -88,7 +97,7 @@ impl Pipeline {
         Self { cfg }
     }
 
-    pub fn run(&self, progress: &dyn ProgressSink) -> Result<PipelineReport> {
+    pub fn run(&self, progress: &dyn ProgressSink) -> Result<PipelineOutput> {
         let start = Instant::now();
 
         // 1. Scan
@@ -295,7 +304,7 @@ impl Pipeline {
             )?;
         }
 
-        Ok(PipelineReport {
+        let report = PipelineReport {
             photo_count: photos.len(),
             cached_count,
             extracted_count: extract_count,
@@ -304,6 +313,12 @@ impl Pipeline {
             picked_count,
             rejected_count,
             elapsed: start.elapsed(),
+        };
+        Ok(PipelineOutput {
+            report,
+            stage_a_picks,
+            composition_picks,
+            photos: photos_by_id,
         })
     }
 }

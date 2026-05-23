@@ -191,7 +191,7 @@ fn run_scan(args: ScanArgs) -> Result<()> {
     };
 
     let pipeline = Pipeline::new(cfg);
-    let report = if args.quiet {
+    let output = if args.quiet {
         pipeline.run(&NoopProgress)?
     } else {
         let sink = IndicatifProgress::new();
@@ -199,6 +199,7 @@ fn run_scan(args: ScanArgs) -> Result<()> {
         sink.finish_all();
         result
     };
+    let report = output.report;
 
     let verb = if args.dry_run { "would place" } else { "placed" };
     let stage_b_note = if report.stage_b_group_count > 0 {

@@ -2,7 +2,7 @@ mod decoder;
 mod exif;
 mod scanner;
 
-pub use decoder::{decode_thumbnail, decode_thumbnail_for, ThumbnailSpec};
+pub use decoder::{decode_thumbnail, decode_thumbnail_for, encode_jpeg, ThumbnailSpec};
 pub use exif::ExifInfo;
 pub use scanner::{FsScanner, Scanner};
 

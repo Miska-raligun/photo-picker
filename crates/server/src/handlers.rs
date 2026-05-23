@@ -1,13 +1,17 @@
-use crate::state::{AppState, RunRecord, RunStatus};
+use crate::state::{AppState, ExplanationRecord, RunRecord, RunStatus};
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse, Json};
 use photo_pick_core::group::{StageAParams, StageBParams};
-use photo_pick_core::ingest::ThumbnailSpec;
+use photo_pick_core::ingest::{decode_thumbnail_for, encode_jpeg, ThumbnailSpec};
 use photo_pick_core::models::ExecutionProvider;
 use photo_pick_core::pipeline::{LinkMode, NoopProgress, Pipeline, PipelineConfig};
 use photo_pick_core::scoring::TechWeights;
+use photo_pick_core::vlm::{
+    explain_group_prompt, AnthropicProvider, OpenAiProvider, VlmImage, VlmProvider, VlmRequest,
+};
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
 use uuid::Uuid;
@@ -68,6 +72,9 @@ pub async fn scan(
         status: RunStatus::Running,
         report: None,
         html_report: None,
+        composition_picks: vec![],
+        photos: HashMap::new(),
+        explanations: HashMap::new(),
     };
     state.runs.lock().await.insert(run_id.clone(), record);
 
@@ -105,10 +112,12 @@ pub async fn scan(
         let mut guard = runs.blocking_lock();
         if let Some(rec) = guard.get_mut(&run_id_for_task) {
             match result {
-                Ok(report) => {
+                Ok(output) => {
                     rec.status = RunStatus::Completed;
-                    rec.report = Some(report);
+                    rec.report = Some(output.report);
                     rec.html_report = Some(html_report_path);
+                    rec.composition_picks = output.composition_picks;
+                    rec.photos = output.photos;
                 }
                 Err(e) => {
                     rec.status = RunStatus::Failed { error: e.to_string() };
@@ -135,6 +144,122 @@ pub async fn list_runs(State(state): State<AppState>) -> Json<serde_json::Value>
     let guard = state.runs.lock().await;
     let runs: Vec<&RunRecord> = guard.values().collect();
     Json(serde_json::to_value(runs).unwrap())
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ExplainRequest {
+    /// Index into the run's composition_picks vector.
+    pub composition_index: usize,
+    /// "openai" or "anthropic" (default: "openai").
+    #[serde(default = "default_provider")]
+    pub provider: String,
+}
+
+fn default_provider() -> String { "openai".into() }
+
+/// Send a composition group's photos to a VLM and return its explanation.
+/// Results are cached in the run record — re-asking the same composition with
+/// the same provider returns instantly.
+pub async fn explain(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(req): Json<ExplainRequest>,
+) -> impl IntoResponse {
+    // Snapshot what we need without holding the lock across the blocking call.
+    let snapshot = {
+        let guard = state.runs.lock().await;
+        let Some(rec) = guard.get(&id) else {
+            return (StatusCode::NOT_FOUND, "run not found").into_response();
+        };
+        if let Some(cached) = rec.explanations.get(&req.composition_index) {
+            if cached.provider == req.provider {
+                return Json(serde_json::to_value(cached).unwrap()).into_response();
+            }
+        }
+        let Some(pick) = rec.composition_picks.get(req.composition_index) else {
+            return (StatusCode::NOT_FOUND, "composition_index out of range").into_response();
+        };
+        let scene = pick
+            .kept
+            .first()
+            .or_else(|| pick.rejected.first())
+            .map(|(_, fs)| match fs.scene {
+                photo_pick_core::scoring::Scene::Portrait => "portrait",
+                photo_pick_core::scoring::Scene::Landscape => "landscape",
+                photo_pick_core::scoring::Scene::Mixed => "mixed",
+            })
+            .unwrap_or("unknown")
+            .to_string();
+        let kept_count = pick.kept.len();
+        let total = pick.kept.len() + pick.rejected.len();
+        let entries: Vec<(String, std::path::PathBuf)> = pick
+            .kept
+            .iter()
+            .chain(pick.rejected.iter())
+            .filter_map(|(pid, _)| {
+                let p = rec.photos.get(pid)?;
+                let label = p.path.file_name()?.to_string_lossy().to_string();
+                Some((label, p.path.clone()))
+            })
+            .collect();
+        (scene, kept_count, total, entries)
+    };
+
+    let (scene, kept_count, total, entries) = snapshot;
+    let provider_name = req.provider.clone();
+    let index = req.composition_index;
+    let runs = state.runs.clone();
+
+    let result = tokio::task::spawn_blocking(move || -> Result<ExplanationRecord, String> {
+        let provider: Box<dyn VlmProvider> = match provider_name.as_str() {
+            "openai" => Box::new(OpenAiProvider::from_env().map_err(|e| e.to_string())?),
+            "anthropic" => Box::new(AnthropicProvider::from_env().map_err(|e| e.to_string())?),
+            other => return Err(format!("unknown provider: {other}")),
+        };
+
+        let images: Vec<VlmImage> = entries
+            .into_iter()
+            .filter_map(|(label, path)| {
+                let p = photo_pick_core::ingest::PhotoRef {
+                    id: photo_pick_core::ingest::PhotoId::new(),
+                    path,
+                    format: photo_pick_core::ingest::ImageFormat::Jpeg,
+                    captured_at: None,
+                    file_size: 0,
+                    sha256_short: [0; 16],
+                    burst_id: None,
+                    drive_mode: None,
+                    iso: None,
+                    exposure_bias_ev: None,
+                };
+                let img = decode_thumbnail_for(&p, ThumbnailSpec { long_edge: 512 }).ok()?;
+                let jpeg_bytes = encode_jpeg(&img, 80).ok()?;
+                Some(VlmImage { jpeg_bytes, label })
+            })
+            .collect();
+
+        let prompt = explain_group_prompt(&scene, kept_count, total);
+        let req = VlmRequest::new(prompt, images);
+        let text = provider.complete(&req).map_err(|e| e.to_string())?;
+        Ok(ExplanationRecord {
+            provider: provider.name().to_string(),
+            model: provider.model().to_string(),
+            text,
+        })
+    })
+    .await;
+
+    match result {
+        Ok(Ok(rec)) => {
+            let mut guard = runs.lock().await;
+            if let Some(run) = guard.get_mut(&id) {
+                run.explanations.insert(index, rec.clone());
+            }
+            Json(serde_json::to_value(rec).unwrap()).into_response()
+        }
+        Ok(Err(msg)) => (StatusCode::BAD_GATEWAY, msg).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("task: {e}")).into_response(),
+    }
 }
 
 /// Serve the on-disk HTML report a completed run wrote. We avoid generic
