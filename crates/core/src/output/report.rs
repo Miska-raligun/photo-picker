@@ -1,4 +1,5 @@
 use crate::error::{Error, Result};
+use crate::group::CompositionGroup;
 use crate::ingest::{PhotoId, PhotoRef};
 use crate::scoring::{SelectedGroup, TechScore};
 use chrono::{DateTime, Utc};
@@ -19,6 +20,13 @@ pub struct JsonReport<'a> {
     pub picked_count: usize,
     pub rejected_count: usize,
     pub groups: Vec<JsonGroup<'a>>,
+    pub stage_b_groups: Vec<JsonStageBGroup>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct JsonStageBGroup {
+    pub id: String,
+    pub photo_ids: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -49,6 +57,7 @@ pub fn write_json_report(
     elapsed: Duration,
     photos: &HashMap<PhotoId, PhotoRef>,
     selections: &[SelectedGroup],
+    stage_b_groups: &[CompositionGroup],
 ) -> Result<()> {
     let mut picked_count = 0usize;
     let mut rejected_count = 0usize;
@@ -114,6 +123,14 @@ pub fn write_json_report(
         })
         .collect();
 
+    let stage_b_json: Vec<JsonStageBGroup> = stage_b_groups
+        .iter()
+        .map(|g| JsonStageBGroup {
+            id: g.id.0.to_string(),
+            photo_ids: g.photo_ids.iter().map(|p| p.0.to_string()).collect(),
+        })
+        .collect();
+
     let report = JsonReport {
         version: env!("CARGO_PKG_VERSION"),
         root: root.to_path_buf(),
@@ -124,6 +141,7 @@ pub fn write_json_report(
         picked_count,
         rejected_count,
         groups: json_groups,
+        stage_b_groups: stage_b_json,
     };
 
     if let Some(parent) = path.parent() {

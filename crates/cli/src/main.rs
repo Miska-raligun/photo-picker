@@ -1,8 +1,9 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use indicatif::{ProgressBar, ProgressStyle};
-use photo_pick_core::group::StageAParams;
+use photo_pick_core::group::{StageAParams, StageBParams};
 use photo_pick_core::ingest::ThumbnailSpec;
+use photo_pick_core::models::ExecutionProvider;
 use photo_pick_core::pipeline::{LinkMode, NoopProgress, Pipeline, PipelineConfig, ProgressSink, Stage};
 use photo_pick_core::scoring::TechWeights;
 use std::path::PathBuf;
@@ -54,6 +55,14 @@ struct ScanArgs {
     /// Stage A maximum time-window (seconds). Caps adaptive widening for sparse shoots.
     #[arg(long, default_value_t = 30.0)]
     max_dt: f32,
+
+    /// Stage B CLIP cosine-similarity threshold for "same composition" merge.
+    #[arg(long, default_value_t = 0.93)]
+    stage_b_threshold: f32,
+
+    /// Disable CLIP loading (skip Stage B; pipeline behaves like M2).
+    #[arg(long)]
+    no_clip: bool,
 
     /// Stage A maximum pHash Hamming distance.
     #[arg(long, default_value_t = 6)]
@@ -132,12 +141,17 @@ fn run_scan(args: ScanArgs) -> Result<()> {
             max_dt: Duration::from_secs_f32(args.max_dt),
             max_hash_dist: args.hash_dist,
         },
+        stage_b: StageBParams {
+            similarity_threshold: args.stage_b_threshold,
+        },
         k1: args.k1,
         k2: args.k2,
         tech_weights: TechWeights::default(),
         link_mode: args.link.into(),
         thumbnail: ThumbnailSpec::default(),
         dry_run: args.dry_run,
+        enable_clip: !args.no_clip,
+        execution_provider: ExecutionProvider::Cpu,
     };
 
     let pipeline = Pipeline::new(cfg);
@@ -151,13 +165,19 @@ fn run_scan(args: ScanArgs) -> Result<()> {
     };
 
     let verb = if args.dry_run { "would place" } else { "placed" };
+    let stage_b_note = if report.stage_b_group_count > 0 {
+        format!(", {} composition groups", report.stage_b_group_count)
+    } else {
+        String::new()
+    };
     println!(
-        "Done in {:.2}s — {} photos in {} groups, {} kept / {} rejected, {} in {}",
+        "Done in {:.2}s — {} photos in {} groups, {} kept / {} rejected{}, {} in {}",
         report.elapsed.as_secs_f64(),
         report.photo_count,
         report.group_count,
         report.picked_count,
         report.rejected_count,
+        stage_b_note,
         verb,
         args.output.display(),
     );
@@ -213,8 +233,9 @@ impl ProgressSink for IndicatifProgress {
                 );
                 *self.features.lock().unwrap() = Some(pb);
             }
-            Stage::Cluster => eprintln!("clustering..."),
-            Stage::Score => eprintln!("scoring + selecting..."),
+            Stage::Cluster => eprintln!("stage A (time + hash) clustering..."),
+            Stage::Score => eprintln!("scoring + selecting top-K1..."),
+            Stage::StageB => eprintln!("stage B (CLIP composition) clustering..."),
             Stage::Write => {
                 let pb = ProgressBar::new(total);
                 pb.set_style(

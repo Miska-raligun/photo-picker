@@ -1,7 +1,9 @@
 mod stage_a;
-mod unionfind;
+mod stage_b;
+pub(crate) mod unionfind;
 
 pub use stage_a::{cluster_stage_a, StageAParams};
+pub use stage_b::{cluster_stage_b, CompositionGroup, StageBParams};
 
 use crate::ingest::PhotoId;
 use serde::{Deserialize, Serialize};

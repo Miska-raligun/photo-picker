@@ -22,6 +22,12 @@ pub struct PhotoFeatures {
     pub wb:            Option<f32>,
     pub sharpness_raw: Option<f32>,
     pub noise:         Option<f32>,
+
+    /// L2-normalized CLIP embedding (M3+). Skipped from serialization — 512
+    /// f32 per photo would bloat the JSON report by ~2KB/photo without value
+    /// to humans; recompute from the cache if you need it.
+    #[serde(skip)]
+    pub clip_embed: Option<Vec<f32>>,
 }
 
 impl PhotoFeatures {
@@ -34,6 +40,7 @@ impl PhotoFeatures {
             wb: None,
             sharpness_raw: None,
             noise: None,
+            clip_embed: None,
         }
     }
 

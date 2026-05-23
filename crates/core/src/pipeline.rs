@@ -1,7 +1,8 @@
 use crate::error::Result;
 use crate::features::{FeatureExtractor, FullExtractor, PhotoFeatures};
-use crate::group::{cluster_stage_a, Group, StageAParams};
+use crate::group::{cluster_stage_a, cluster_stage_b, CompositionGroup, Group, StageAParams, StageBParams};
 use crate::ingest::{decode_thumbnail_for, FsScanner, PhotoId, PhotoRef, Scanner, ThumbnailSpec};
+use crate::models::{ClipEncoder, ExecutionProvider};
 use crate::output::{materialize, write_json_report};
 use crate::scoring::{select_top_k_per_group, SelectedGroup, TechWeights};
 use rayon::prelude::*;
@@ -24,6 +25,7 @@ pub enum Stage {
     Features,
     Cluster,
     Score,
+    StageB,
     Write,
 }
 
@@ -46,12 +48,17 @@ pub struct PipelineConfig {
     pub output: PathBuf,
     pub report_path: Option<PathBuf>,
     pub stage_a: StageAParams,
+    pub stage_b: StageBParams,
     pub k1: usize,
-    pub k2: usize, // M3+: not used yet
+    pub k2: usize, // M3.7+: used once final score is in
     pub tech_weights: TechWeights,
     pub link_mode: LinkMode,
     pub thumbnail: ThumbnailSpec,
     pub dry_run: bool,
+    /// When true, load CLIP and run Stage B. When false (or model load fails),
+    /// behaves like M2 — only Stage A + tech score.
+    pub enable_clip: bool,
+    pub execution_provider: ExecutionProvider,
 }
 
 #[derive(Debug, Serialize)]
@@ -60,6 +67,7 @@ pub struct PipelineReport {
     pub group_count: usize,
     pub picked_count: usize,
     pub rejected_count: usize,
+    pub stage_b_group_count: usize,
     pub elapsed: Duration,
 }
 
@@ -82,8 +90,24 @@ impl Pipeline {
         progress.on_finish(Stage::Scan);
         tracing::info!(count = photos.len(), "scan complete");
 
-        // 2. Feature extraction (hashes + raw tech scores) in parallel.
-        let extractor = FullExtractor::new();
+        // 2. Feature extraction (hashes + raw tech scores + optional CLIP)
+        let clip = if self.cfg.enable_clip {
+            match ClipEncoder::load(self.cfg.execution_provider) {
+                Ok(e) => {
+                    tracing::info!("CLIP encoder loaded");
+                    Some(e)
+                }
+                Err(err) => {
+                    tracing::warn!(%err, "CLIP load failed; continuing without Stage B");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        let clip_enabled = clip.is_some();
+
+        let extractor = FullExtractor::new(clip);
         let total = photos.len() as u64;
         progress.on_stage(Stage::Features, total);
         let counter = Mutex::new(0u64);
@@ -133,7 +157,27 @@ impl Pipeline {
         progress.on_finish(Stage::Score);
         tracing::info!(picked = picked_total, rejected = rejected_total, "selection complete");
 
-        // 5. Output
+        // 5. Stage B — composition clustering on the K1-kept photos
+        let stage_b_groups: Vec<CompositionGroup> = if clip_enabled {
+            progress.on_stage(Stage::StageB, 0);
+            let kept_with_embeds: Vec<(PhotoId, Vec<f32>)> = selections
+                .iter()
+                .flat_map(|s| s.kept.iter().map(|(pid, _)| *pid))
+                .filter_map(|pid| {
+                    features
+                        .get(&pid)
+                        .and_then(|f| f.clip_embed.clone().map(|e| (pid, e)))
+                })
+                .collect();
+            let bg = cluster_stage_b(&kept_with_embeds, &self.cfg.stage_b);
+            progress.on_finish(Stage::StageB);
+            tracing::info!(group_count = bg.len(), photos = kept_with_embeds.len(), "stage B complete");
+            bg
+        } else {
+            vec![]
+        };
+
+        // 6. Output
         let photos_by_id: HashMap<PhotoId, PhotoRef> =
             photos.iter().cloned().map(|p| (p.id, p)).collect();
 
@@ -149,7 +193,14 @@ impl Pipeline {
         };
 
         if let Some(report_path) = &self.cfg.report_path {
-            write_json_report(report_path, &self.cfg.root, start.elapsed(), &photos_by_id, &selections)?;
+            write_json_report(
+                report_path,
+                &self.cfg.root,
+                start.elapsed(),
+                &photos_by_id,
+                &selections,
+                &stage_b_groups,
+            )?;
         }
 
         Ok(PipelineReport {
@@ -157,6 +208,7 @@ impl Pipeline {
             group_count: groups.len(),
             picked_count,
             rejected_count,
+            stage_b_group_count: stage_b_groups.len(),
             elapsed: start.elapsed(),
         })
     }
