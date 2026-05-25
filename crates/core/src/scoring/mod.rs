@@ -137,11 +137,14 @@ pub fn compute_final_score(
 }
 
 pub fn compute_raw_scores(thumb: &DynamicImage, photo: &PhotoRef) -> RawTechScores {
+    // Convert to luma once and share across the three luma-based scorers
+    // (exposure, sharpness, noise) instead of each re-deriving it.
+    let gray = thumb.to_luma8();
     RawTechScores {
-        exposure: exposure::score(thumb, photo.exposure_bias_ev),
+        exposure: exposure::score(&gray, photo.exposure_bias_ev),
         wb: wb::score(thumb),
-        sharpness_raw: sharpness::raw(thumb),
-        noise: noise::score(thumb, photo.iso),
+        sharpness_raw: sharpness::raw(&gray),
+        noise: noise::score(&gray, photo.iso),
     }
 }
 

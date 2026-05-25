@@ -1,10 +1,9 @@
-use image::DynamicImage;
+use image::GrayImage;
 
 /// Plan B.1:
 ///   exposure = 0.4·(H/8) + 0.3·(1-over_pen) + 0.2·(1-under_pen) + 0.1·p_mid
 /// EV bias outside ±1.5 EV trims an extra 0.1 (high-key/low-key intent flagged).
-pub fn score(img: &DynamicImage, exposure_bias_ev: Option<f32>) -> f32 {
-    let gray = img.to_luma8();
+pub fn score(gray: &GrayImage, exposure_bias_ev: Option<f32>) -> f32 {
     let total = (gray.width() as f32) * (gray.height() as f32);
     if total < 1.0 {
         return 0.0;
@@ -47,24 +46,24 @@ pub fn score(img: &DynamicImage, exposure_bias_ev: Option<f32>) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use image::{DynamicImage, Rgb, RgbImage};
+    use image::{GrayImage, Luma};
 
-    fn solid(color: u8) -> DynamicImage {
-        let mut img = RgbImage::new(64, 64);
+    fn solid(color: u8) -> GrayImage {
+        let mut img = GrayImage::new(64, 64);
         for p in img.pixels_mut() {
-            *p = Rgb([color, color, color]);
+            *p = Luma([color]);
         }
-        DynamicImage::ImageRgb8(img)
+        img
     }
 
     /// Ramp covering 5..250 (avoids clipping at either end, like a well-exposed scene).
-    fn ramp() -> DynamicImage {
-        let mut img = RgbImage::new(256, 64);
+    fn ramp() -> GrayImage {
+        let mut img = GrayImage::new(256, 64);
         for (x, _y, p) in img.enumerate_pixels_mut() {
             let v = (5 + (x as u32 * 245 / 255)) as u8;
-            *p = Rgb([v, v, v]);
+            *p = Luma([v]);
         }
-        DynamicImage::ImageRgb8(img)
+        img
     }
 
     #[test]
