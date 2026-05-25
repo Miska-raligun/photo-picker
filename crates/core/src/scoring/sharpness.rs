@@ -43,7 +43,10 @@ pub fn raw(gray: &GrayImage) -> f32 {
     best
 }
 
-fn laplacian_variance(roi: &GrayImage) -> f32 {
+/// Variance of the 4-neighbor Laplacian over a grayscale region — a standard
+/// focus/sharpness measure. Exposed crate-wide so the face detector can reuse it
+/// on face crops (see `scoring::face_yunet`).
+pub(crate) fn laplacian_variance(roi: &GrayImage) -> f32 {
     let (w, h) = (roi.width() as i32, roi.height() as i32);
     if w < 3 || h < 3 {
         return 0.0;

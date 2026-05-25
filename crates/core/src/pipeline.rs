@@ -14,7 +14,7 @@ use crate::scoring::YunetFaceDetector;
 use crate::output::{materialize, plan_output, write_html_report, write_json_report};
 use crate::scoring::{
     select_top_k_per_composition, select_top_k_per_group, CompositionPick, SelectedGroup,
-    TechScore, TechWeights,
+    TechWeights,
 };
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -300,16 +300,16 @@ impl Pipeline {
             vec![]
         };
 
-        // 6. Final K2 selection per composition group (final scene-aware score)
+        // 6. Final K2 selection per composition group (final scene-aware score).
+        // Sharpness is re-normalized within each composition group here.
         let composition_picks: Vec<CompositionPick> = if !stage_b_groups.is_empty() {
             progress.on_stage(Stage::FinalSelect, 0);
-            // Collect tech scores from Stage A picks for lookup.
-            let tech_scores: HashMap<PhotoId, TechScore> = stage_a_picks
-                .iter()
-                .flat_map(|s| s.kept.iter().chain(s.rejected.iter()).copied())
-                .collect();
-            let cp =
-                select_top_k_per_composition(&stage_b_groups, &features, &tech_scores, self.cfg.k2);
+            let cp = select_top_k_per_composition(
+                &stage_b_groups,
+                &features,
+                self.cfg.k2,
+                &self.cfg.tech_weights,
+            );
             let kept_total: usize = cp.iter().map(|p| p.kept.len()).sum();
             progress.on_finish(Stage::FinalSelect);
             tracing::info!(kept_total, "K2 selection complete");
