@@ -85,6 +85,8 @@ pub struct FinalScore {
 ///   `face_bonus = mean(face_quality_f) · coverage`
 /// `coverage` is 1.0 when at least `ceil(N·0.8)` faces have `eye_open > 0.5`,
 /// otherwise the fraction of open-eye faces (avoids hard-zeroing big groups).
+/// Faces whose detector doesn't report an eye-open probability (e.g. YuNet)
+/// count as open, so coverage isn't forced to zero by missing data.
 pub fn face_bonus_score(face: &FaceInfo) -> f32 {
     let n = face.count();
     if n == 0 {
@@ -99,7 +101,9 @@ pub fn face_bonus_score(face: &FaceInfo) -> f32 {
         let sharp = f.local_sharpness.unwrap_or(0.5);
         let q = 0.3 * size + 0.4 * eye.clamp(0.0, 1.0) + 0.2 * sharp.clamp(0.0, 1.0) + 0.1 * smile.clamp(0.0, 1.0);
         total += q;
-        if eye > 0.5 {
+        // Unknown eye state (detector doesn't provide one, e.g. YuNet) must not
+        // count as closed — otherwise coverage hard-zeros the whole bonus.
+        if f.eye_open_prob.map_or(true, |p| p > 0.5) {
             open_count += 1;
         }
     }
@@ -313,6 +317,39 @@ mod tests {
         let id = PhotoId::new();
         let m = finalize_group(&[(id, raw(123.4))], &TechWeights::default());
         assert!((m[&id].sharpness - 0.5).abs() < 1e-3);
+    }
+
+    fn face(area: f32, eye_open_prob: Option<f32>) -> FaceBox {
+        let side = area.sqrt();
+        FaceBox {
+            x: 0.0,
+            y: 0.0,
+            w: side,
+            h: side,
+            eye_open_prob,
+            smile_prob: None,
+            local_sharpness: None,
+        }
+    }
+
+    #[test]
+    fn face_bonus_nonzero_when_eye_state_unknown() {
+        // YuNet leaves eye_open_prob = None; a detected face must still earn a
+        // bonus instead of being zeroed by the coverage gate.
+        let info = FaceInfo { faces: vec![face(0.1, None)] };
+        assert!(face_bonus_score(&info) > 0.0);
+    }
+
+    #[test]
+    fn face_bonus_zero_without_faces() {
+        assert_eq!(face_bonus_score(&FaceInfo::default()), 0.0);
+    }
+
+    #[test]
+    fn face_bonus_penalizes_closed_eyes() {
+        let open = FaceInfo { faces: vec![face(0.1, Some(0.9)), face(0.1, Some(0.9))] };
+        let one_closed = FaceInfo { faces: vec![face(0.1, Some(0.9)), face(0.1, Some(0.1))] };
+        assert!(face_bonus_score(&one_closed) < face_bonus_score(&open));
     }
 
     #[test]
