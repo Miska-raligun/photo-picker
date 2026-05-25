@@ -80,10 +80,21 @@ fn decode_image_file(path: &Path) -> Result<DynamicImage> {
         .map_err(|e| Error::Decode { path: path.to_path_buf(), source: e })
 }
 
-/// Walk all IFDs of a TIFF-container RAW, find the largest embedded JPEG, and
-/// return its bytes. The "largest" rule is what most RAW formats use to mark
-/// the full-resolution preview vs. the tiny thumbnail-strip preview.
+/// Find the largest embedded JPEG inside a TIFF-container RAW.
+///
+/// Strategy: EXIF first (cheap, exact), then a brute byte-scan fallback.
+/// The fallback exists because vendor RAW formats (notably Nikon NEF) park
+/// the full-resolution preview JPEG in a SubIFD that kamadak-exif's top-level
+/// `In(N)` iterator doesn't reach. Scanning for SOI/EOI markers and keeping
+/// the largest hit is format-agnostic and very robust.
 fn extract_tiff_preview_jpeg(path: &Path) -> Result<Vec<u8>> {
+    if let Ok(bytes) = extract_via_exif(path) {
+        return Ok(bytes);
+    }
+    extract_via_jpeg_scan(path)
+}
+
+fn extract_via_exif(path: &Path) -> Result<Vec<u8>> {
     use exif::{In, Tag};
 
     let mut file = File::open(path).map_err(|e| Error::Io { path: path.to_path_buf(), source: e })?;
@@ -92,26 +103,19 @@ fn extract_tiff_preview_jpeg(path: &Path) -> Result<Vec<u8>> {
         .read_from_container(&mut buf)
         .map_err(|e| Error::Exif { path: path.to_path_buf(), source: e })?;
 
-    // Find the IFD whose JPEGInterchangeFormat points at the largest JPEG blob.
-    let mut best: Option<(u64, u64)> = None; // (offset, length)
+    let mut best: Option<(u64, u64)> = None;
     for ifd in [In::PRIMARY, In(1), In(2)] {
         let offset = exif_data.get_field(Tag::JPEGInterchangeFormat, ifd);
         let length = exif_data.get_field(Tag::JPEGInterchangeFormatLength, ifd);
         if let (Some(off_f), Some(len_f)) = (offset, length) {
-            let off = first_long(&off_f.value);
-            let len = first_long(&len_f.value);
-            if let (Some(o), Some(l)) = (off, len) {
+            if let (Some(o), Some(l)) = (first_long(&off_f.value), first_long(&len_f.value)) {
                 if best.map(|(_, bl)| l > bl).unwrap_or(true) {
                     best = Some((o, l));
                 }
             }
         }
     }
-
-    let (offset, length) = best.ok_or_else(|| Error::Config(format!(
-        "{}: no embedded JPEG preview found (RAW may lack a preview block)",
-        path.display()
-    )))?;
+    let (offset, length) = best.ok_or_else(|| Error::Config("no preview in top-level IFDs".into()))?;
 
     let mut file = File::open(path).map_err(|e| Error::Io { path: path.to_path_buf(), source: e })?;
     file.seek(SeekFrom::Start(offset))
@@ -120,6 +124,63 @@ fn extract_tiff_preview_jpeg(path: &Path) -> Result<Vec<u8>> {
     file.read_exact(&mut bytes)
         .map_err(|e| Error::Io { path: path.to_path_buf(), source: e })?;
     Ok(bytes)
+}
+
+/// Scan the file bytes for `FF D8 ... FF D9` JPEG segments and return the
+/// largest one. Reads up to 128MB; covers virtually all consumer RAWs without
+/// pulling the whole file when files are huge.
+fn extract_via_jpeg_scan(path: &Path) -> Result<Vec<u8>> {
+    const MAX_SCAN_BYTES: usize = 128 * 1024 * 1024;
+
+    let mut file = File::open(path).map_err(|e| Error::Io { path: path.to_path_buf(), source: e })?;
+    let meta = file.metadata().map_err(|e| Error::Io { path: path.to_path_buf(), source: e })?;
+    let to_read = (meta.len() as usize).min(MAX_SCAN_BYTES);
+    let mut buf = vec![0u8; to_read];
+    file.read_exact(&mut buf)
+        .map_err(|e| Error::Io { path: path.to_path_buf(), source: e })?;
+
+    let mut best: Option<(usize, usize)> = None;
+    let mut i = 0usize;
+    while i + 1 < buf.len() {
+        if buf[i] == 0xFF && buf[i + 1] == 0xD8 {
+            // Found SOI; scan forward for matching EOI. Skip past entropy data
+            // by stepping byte-by-byte (some markers contain 0xFF padding which
+            // doesn't matter for finding the final 0xFFD9).
+            let start = i;
+            let mut j = i + 2;
+            let mut found_eoi = false;
+            while j + 1 < buf.len() {
+                if buf[j] == 0xFF && buf[j + 1] == 0xD9 {
+                    let end = j + 2;
+                    let len = end - start;
+                    // Embedded thumbnails in NEFs/CR2s are usually 5-50KB; the
+                    // full-resolution preview is multiple MB. Tracking the max
+                    // naturally lands on the preview.
+                    if best.map(|(s, e)| len > e - s).unwrap_or(true) {
+                        best = Some((start, end));
+                    }
+                    i = end;
+                    found_eoi = true;
+                    break;
+                }
+                j += 1;
+            }
+            if !found_eoi {
+                break; // Unterminated; nothing useful past here.
+            }
+        } else {
+            i += 1;
+        }
+    }
+
+    match best {
+        Some((s, e)) => Ok(buf[s..e].to_vec()),
+        None => Err(Error::Config(format!(
+            "{}: no embedded JPEG preview found in first {}MB",
+            path.display(),
+            to_read / 1024 / 1024
+        ))),
+    }
 }
 
 fn first_long(v: &exif::Value) -> Option<u64> {

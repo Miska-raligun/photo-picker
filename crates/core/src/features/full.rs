@@ -3,8 +3,8 @@ use crate::error::{Error, Result};
 use crate::ingest::PhotoRef;
 use crate::models::ClipEncoder;
 use crate::scoring::{
-    compute_raw_scores, AestheticScorer, CompositionScorer, FaceDetector, NeutralAestheticStub,
-    NeutralCompositionStub, NoFaceDetectorStub,
+    compute_raw_scores, AestheticScorer, CompositionScorer, FaceDetector,
+    HeuristicAestheticScorer, HeuristicCompositionScorer, NoFaceDetectorStub,
 };
 use image::DynamicImage;
 use std::sync::Mutex;
@@ -37,8 +37,8 @@ impl FullExtractor {
             hashes: HashOnlyExtractor::new(),
             clip: clip.map(Mutex::new),
             face: Box::new(NoFaceDetectorStub),
-            aesthetic: Box::new(NeutralAestheticStub),
-            composition: Box::new(NeutralCompositionStub),
+            aesthetic: Box::new(HeuristicAestheticScorer),
+            composition: Box::new(HeuristicCompositionScorer),
         }
     }
 

@@ -5,6 +5,28 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
+/// What the pipeline should ingest: either a directory walk or an explicit
+/// caller-provided file list.
+#[derive(Debug, Clone)]
+pub enum PhotoSource {
+    Directory(std::path::PathBuf),
+    Files(Vec<std::path::PathBuf>),
+}
+
+impl PhotoSource {
+    /// Best-effort "where did these photos come from" for logs / reports.
+    pub fn root_hint(&self) -> std::path::PathBuf {
+        match self {
+            Self::Directory(p) => p.clone(),
+            Self::Files(fs) => fs
+                .first()
+                .and_then(|f| f.parent())
+                .map(|p| p.to_path_buf())
+                .unwrap_or_else(|| std::path::PathBuf::from(".")),
+        }
+    }
+}
+
 pub trait Scanner: Send + Sync {
     fn scan(&self, root: &Path) -> Result<Vec<PhotoRef>>;
 }
@@ -52,6 +74,38 @@ impl Scanner for FsScanner {
         }
         Ok(out)
     }
+}
+
+/// Scan an explicit caller-provided list of photo file paths. Skips entries
+/// that don't classify as a supported format or fail to open.
+pub fn scan_files(paths: &[std::path::PathBuf]) -> Result<Vec<PhotoRef>> {
+    let mut out = Vec::new();
+    for path in paths {
+        let Some(format) = classify(path) else {
+            tracing::warn!(path = %path.display(), "skipping (unsupported extension)");
+            continue;
+        };
+        match build_photo_ref(path.clone(), format) {
+            Ok(p) => out.push(p),
+            Err(err) => tracing::warn!(path = %path.display(), %err, "skipping unreadable photo"),
+        }
+    }
+    if out.is_empty() {
+        return Err(Error::EmptyScan {
+            root: paths
+                .first()
+                .and_then(|p| p.parent())
+                .map(|p| p.to_path_buf())
+                .unwrap_or_else(|| std::path::PathBuf::from(".")),
+        });
+    }
+    Ok(out)
+}
+
+/// Public helper so callers (like the browse endpoint) can ask "is this a
+/// photo extension we'd ingest?" without duplicating the table.
+pub fn classify_extension(path: &Path) -> Option<super::ImageFormat> {
+    classify(path)
 }
 
 fn classify(path: &Path) -> Option<ImageFormat> {

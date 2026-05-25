@@ -67,14 +67,35 @@ pub trait VlmProvider: Send + Sync {
     fn complete(&self, req: &VlmRequest) -> Result<String>;
 }
 
-/// Build the default explain-group prompt used by the Web UI.
-pub fn explain_group_prompt(scene: &str, kept_count: usize, total: usize) -> String {
+/// Build the explain-group prompt used by the Web UI.
+///
+/// `lang` is the user's UI language code ("en", "zh"). The model is told
+/// nothing about the algorithm's pick so its ranking is independent — the
+/// user compares the model's ordering against the algorithm's verdict to
+/// spot disagreements.
+pub fn explain_group_prompt(scene: &str, _kept_count: usize, total: usize, lang: &str) -> String {
+    let response_lang = match lang {
+        "zh" => "Simplified Chinese (中文)",
+        _ => "English",
+    };
     format!(
-        "You are looking at {total} photos from the same burst / composition group. \
-         The pipeline identified them as '{scene}' scene and selected {kept_count} as keepers. \
-         For each kept image, give a one-sentence reason it beat the rejected ones — be \
-         concrete (eyes open vs closed, focus, expression, framing). For the rejected images, \
-         a brief one-line note on what's off. Keep total response under 250 words. \
-         The first {kept_count} images are the keepers, the rest are rejected (in rank order)."
+        "I am sending you EXACTLY {total} photos from the same scene. They are labelled \
+         Image 1 through Image {total} in attachment order. Scene type hint: {scene}.\n\n\
+         TASK: Rank these {total} photos from best to worst as photographs. Judge by what you \
+         actually observe in each image:\n\
+         - Focus / sharpness (especially on the main subject)\n\
+         - Subject expression and pose (eyes open, natural expression for portraits)\n\
+         - Composition and framing\n\
+         - Exposure (no clipped highlights or crushed shadows)\n\
+         - Motion blur from subject or camera shake\n\
+         - Any distracting elements (extras in frame, phones, lens flare)\n\n\
+         RULES:\n\
+         - Output EXACTLY {total} ranked lines, best first.\n\
+         - Format each line as: `Rank N (Image X): <one concrete sentence about that specific photo>`\n\
+         - X is the image number from the attachment order. N is your rank.\n\
+         - Reference observations you can actually see; do not invent extra images.\n\
+         - Do NOT assume any prior labels — judge purely on visual evidence.\n\
+         - Total under 300 words.\n\
+         - Respond in {response_lang}."
     )
 }

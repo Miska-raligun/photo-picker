@@ -22,10 +22,9 @@
   --error: #b8453c;
   --shadow: 0 1px 3px rgba(31, 30, 26, 0.04), 0 1px 2px rgba(31, 30, 26, 0.06);
   --shadow-md: 0 4px 12px rgba(31, 30, 26, 0.06), 0 2px 4px rgba(31, 30, 26, 0.04);
+  --shadow-lg: 0 12px 32px rgba(31, 30, 26, 0.12), 0 4px 12px rgba(31, 30, 26, 0.08);
 }
-
 * { box-sizing: border-box; }
-
 body {
   font-family: -apple-system, "Inter", BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
@@ -35,35 +34,14 @@ body {
   line-height: 1.5;
   font-size: 15px;
 }
-
-.container {
-  max-width: 1080px;
-  margin: 0 auto;
-  padding: 2.5rem 1.5rem 4rem;
-}
-
-header.page-header {
-  margin-bottom: 2.5rem;
-}
-header.page-header h1 {
-  margin: 0 0 0.4rem;
-  font-size: 2rem;
-  font-weight: 600;
-  letter-spacing: -0.02em;
-}
-header.page-header .tagline {
-  margin: 0;
-  color: var(--muted);
-  font-size: 0.95rem;
-}
+.container { max-width: 1080px; margin: 0 auto; padding: 2.5rem 1.5rem 4rem; }
+header.page-header { margin-bottom: 2.5rem; }
+header.page-header h1 { margin: 0 0 0.4rem; font-size: 2rem; font-weight: 600; letter-spacing: -0.02em; }
+header.page-header .tagline { margin: 0; color: var(--muted); font-size: 0.95rem; }
 
 .section-label {
-  font-size: 0.75rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--muted);
-  margin: 0 0 0.75rem;
+  font-size: 0.75rem; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.08em; color: var(--muted); margin: 0 0 0.75rem;
 }
 
 .card {
@@ -72,277 +50,365 @@ header.page-header .tagline {
   border-radius: 12px;
   box-shadow: var(--shadow);
 }
+.scan-card { padding: 1.5rem; margin-bottom: 2rem; }
 
-.scan-card {
-  padding: 1.5rem;
-  margin-bottom: 2rem;
-}
-
-form#scan-form {
-  display: grid;
-  gap: 0.9rem;
-  grid-template-columns: 1fr 1fr;
-}
+form#scan-form { display: grid; gap: 0.9rem; grid-template-columns: 1fr 1fr; }
 form#scan-form .full { grid-column: 1 / -1; }
 
-label.field {
-  display: flex;
-  flex-direction: column;
-  font-size: 0.85rem;
-  color: var(--muted);
-}
-label.field strong {
-  color: var(--text);
-  font-weight: 500;
-  font-size: 0.85rem;
-  margin-bottom: 0.3rem;
-}
-label.field input,
-label.field select {
-  border: 1px solid var(--border-strong);
-  border-radius: 8px;
-  padding: 0.55rem 0.7rem;
-  font-size: 0.9rem;
-  font-family: inherit;
-  background: var(--surface);
-  color: var(--text);
+label.field { display: flex; flex-direction: column; font-size: 0.85rem; color: var(--muted); }
+label.field strong { color: var(--text); font-weight: 500; font-size: 0.85rem; margin-bottom: 0.3rem; }
+label.field input, label.field select {
+  border: 1px solid var(--border-strong); border-radius: 8px;
+  padding: 0.55rem 0.7rem; font-size: 0.9rem; font-family: inherit;
+  background: var(--surface); color: var(--text);
   transition: border-color 0.15s, box-shadow 0.15s;
 }
-label.field input:focus,
-label.field select:focus {
-  outline: none;
-  border-color: var(--accent);
+label.field input:focus, label.field select:focus {
+  outline: none; border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-tint);
 }
-
-label.checkbox {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  font-size: 0.9rem;
-  cursor: pointer;
-  padding: 0.5rem 0;
+.input-with-button { display: flex; gap: 0.5rem; }
+.input-with-button input { flex: 1; }
+.path-display {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin-top: 0.3rem;
+  word-break: break-all;
 }
+.selection-pill {
+  display: inline-flex; align-items: center; gap: 0.4rem;
+  background: var(--accent-tint); color: var(--accent-hover);
+  border: 1px solid #f0d7cd;
+  padding: 3px 10px; border-radius: 999px; font-size: 0.78rem; font-weight: 500;
+  margin-top: 0.3rem;
+}
+.selection-pill button {
+  background: none; border: 0; color: var(--accent-hover);
+  font-size: 1rem; line-height: 1; padding: 0 0 0 4px; cursor: pointer;
+}
+
+label.checkbox { display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem; cursor: pointer; padding: 0.5rem 0; }
 label.checkbox input { width: 1rem; height: 1rem; accent-color: var(--accent); }
 
-.form-actions {
-  grid-column: 1 / -1;
-  display: flex;
-  justify-content: flex-end;
-  gap: 0.5rem;
-  margin-top: 0.4rem;
-}
+.form-actions { grid-column: 1 / -1; display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 0.4rem; }
 
 button.primary {
-  background: var(--accent);
-  color: white;
-  border: 0;
-  border-radius: 8px;
-  padding: 0.6rem 1.4rem;
-  font-size: 0.9rem;
-  font-weight: 500;
-  font-family: inherit;
-  cursor: pointer;
-  transition: background 0.15s;
+  background: var(--accent); color: white; border: 0; border-radius: 8px;
+  padding: 0.6rem 1.4rem; font-size: 0.9rem; font-weight: 500;
+  font-family: inherit; cursor: pointer; transition: background 0.15s;
 }
 button.primary:hover { background: var(--accent-hover); }
 button.primary:disabled { background: #b8b5ac; cursor: not-allowed; }
 
 button.secondary {
-  background: transparent;
-  color: var(--text);
-  border: 1px solid var(--border-strong);
-  border-radius: 8px;
-  padding: 0.45rem 0.9rem;
-  font-size: 0.85rem;
-  font-family: inherit;
-  cursor: pointer;
-  transition: background 0.15s, border-color 0.15s;
+  background: transparent; color: var(--text);
+  border: 1px solid var(--border-strong); border-radius: 8px;
+  padding: 0.45rem 0.9rem; font-size: 0.85rem; font-family: inherit;
+  cursor: pointer; transition: background 0.15s, border-color 0.15s;
 }
 button.secondary:hover { background: var(--surface-alt); border-color: var(--accent); }
+button.secondary:disabled { opacity: 0.5; cursor: not-allowed; }
 
 select.inline {
-  border: 1px solid var(--border-strong);
-  border-radius: 6px;
-  padding: 0.35rem 0.5rem;
-  font-size: 0.85rem;
-  font-family: inherit;
-  background: var(--surface);
+  border: 1px solid var(--border-strong); border-radius: 6px;
+  padding: 0.35rem 0.5rem; font-size: 0.85rem; font-family: inherit; background: var(--surface);
 }
 
-#runs { display: flex; flex-direction: column; gap: 1.5rem; }
-
-.run {
-  padding: 1.5rem 1.75rem;
+/* Browse modal */
+.modal-overlay {
+  position: fixed; inset: 0; background: rgba(31, 30, 26, 0.45);
+  display: none; align-items: center; justify-content: center;
+  z-index: 100; padding: 1rem;
 }
-.run-head {
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
-  margin-bottom: 0.4rem;
+.modal-overlay.open { display: flex; }
+.modal {
+  background: var(--surface); border-radius: 12px; box-shadow: var(--shadow-lg);
+  max-width: 820px; width: 100%; max-height: 88vh;
+  display: flex; flex-direction: column;
 }
-.run-head h3 {
-  margin: 0;
-  font-size: 1rem;
-  font-weight: 600;
+.modal-header {
+  padding: 1rem 1.25rem; border-bottom: 1px solid var(--border);
+  display: flex; justify-content: space-between; align-items: center;
 }
-.run-head code {
+.modal-header h3 { margin: 0; font-size: 1rem; font-weight: 600; }
+.modal-header button.close {
+  background: none; border: 0; font-size: 1.4rem; line-height: 1; padding: 0 0.3rem;
+  cursor: pointer; color: var(--muted);
+}
+.modal-path {
+  display: flex; gap: 0.5rem; align-items: center;
+  padding: 0.65rem 1.25rem; border-bottom: 1px solid var(--border);
   background: var(--surface-alt);
-  padding: 1px 6px;
-  border-radius: 4px;
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
-  font-size: 0.8rem;
-  color: var(--muted);
+}
+.modal-path input {
+  flex: 1; border: 1px solid var(--border-strong); border-radius: 6px;
+  padding: 0.4rem 0.6rem; font-family: ui-monospace, monospace; font-size: 0.82rem;
+  background: white;
+}
+.modal-body { flex: 1; overflow-y: auto; padding: 1rem 1.25rem; }
+.modal-section-label {
+  font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.08em;
+  color: var(--muted); font-weight: 600; margin: 0.5rem 0 0.4rem;
+}
+.modal-section-label:first-child { margin-top: 0; }
+
+.dir-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 0.4rem; margin-bottom: 1rem; }
+.dir-item {
+  display: flex; align-items: center; gap: 0.5rem;
+  padding: 0.45rem 0.65rem; border-radius: 6px; cursor: pointer;
+  font-size: 0.88rem; color: var(--text);
+  border: 1px solid transparent;
+}
+.dir-item:hover { background: var(--surface-alt); border-color: var(--border); }
+.dir-item .icon { color: var(--accent); font-size: 1rem; }
+.dir-item.up { color: var(--muted); }
+
+.file-list { display: flex; flex-direction: column; gap: 0.2rem; }
+.file-item {
+  display: flex; align-items: center; gap: 0.6rem;
+  padding: 0.35rem 0.6rem; border-radius: 6px;
+  font-size: 0.85rem; cursor: pointer;
+}
+.file-item:hover { background: var(--surface-alt); }
+.file-item.selected { background: var(--accent-tint); }
+.file-item input[type="checkbox"] { accent-color: var(--accent); margin: 0; }
+.file-item .name { flex: 1; word-break: break-all; }
+.file-item .meta { color: var(--muted); font-size: 0.75rem; font-family: ui-monospace, monospace; white-space: nowrap; }
+
+.modal-footer {
+  padding: 1rem 1.25rem; border-top: 1px solid var(--border);
+  display: flex; justify-content: space-between; gap: 0.5rem; align-items: center;
+}
+.modal-footer .selection-info { font-size: 0.85rem; color: var(--muted); }
+.modal-footer .actions { display: flex; gap: 0.5rem; }
+
+.empty-msg { color: var(--muted); font-size: 0.85rem; font-style: italic; padding: 0.4rem 0; }
+.error-msg { color: var(--error); font-size: 0.85rem; padding: 0.4rem 0; font-family: ui-monospace, monospace; }
+
+/* Runs (unchanged from previous) */
+#runs { display: flex; flex-direction: column; gap: 1.5rem; }
+.run { padding: 1.5rem 1.75rem; }
+.run-head { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.4rem; }
+.run-head h3 { margin: 0; font-size: 1rem; font-weight: 600; }
+.run-head code {
+  background: var(--surface-alt); padding: 1px 6px; border-radius: 4px;
+  font-family: ui-monospace, monospace; font-size: 0.8rem; color: var(--muted);
 }
 .status-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  padding: 2px 9px;
-  border-radius: 999px;
-  font-size: 0.7rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+  display: inline-flex; align-items: center; gap: 0.35rem;
+  padding: 2px 9px; border-radius: 999px; font-size: 0.7rem;
+  font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;
 }
 .status-pill.running { background: var(--accent-tint); color: var(--accent-hover); }
 .status-pill.running::before { content: ''; width: 6px; height: 6px; background: var(--accent); border-radius: 50%; animation: pulse 1.4s infinite; }
 .status-pill.completed { background: var(--kept-tint); color: var(--kept); }
 .status-pill.failed { background: #fbe5e2; color: var(--error); }
-
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 
-.run-meta {
-  color: var(--muted);
-  font-size: 0.82rem;
-  margin-bottom: 1rem;
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
-  word-break: break-all;
-}
-
-.stats {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  margin-bottom: 1.25rem;
-}
-.stat-pill {
-  background: var(--surface-alt);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 0.4rem 0.75rem;
-  font-size: 0.8rem;
-}
+.run-meta { color: var(--muted); font-size: 0.82rem; margin-bottom: 1rem; font-family: ui-monospace, monospace; word-break: break-all; }
+.stats { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1.25rem; }
+.stat-pill { background: var(--surface-alt); border: 1px solid var(--border); border-radius: 8px; padding: 0.4rem 0.75rem; font-size: 0.8rem; }
 .stat-pill .label { color: var(--muted); margin-right: 0.4rem; }
 .stat-pill .value { font-weight: 600; }
 .stat-pill.cache-hit { border-color: var(--kept); }
 
-.comp-group {
-  border-top: 1px solid var(--border);
-  padding-top: 1.25rem;
-  margin-top: 1.25rem;
-}
-.comp-group:first-of-type { border-top: 0; padding-top: 0; margin-top: 0; }
-.comp-group-head {
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
-  margin-bottom: 0.6rem;
-}
-.comp-group-head h4 {
-  margin: 0;
-  font-size: 0.9rem;
-  font-weight: 600;
-}
 .scene-tag {
-  font-size: 0.7rem;
-  font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--muted);
-  padding: 1px 7px;
-  border: 1px solid var(--border-strong);
-  border-radius: 4px;
+  font-size: 0.68rem; font-weight: 500; text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--muted);
+  padding: 1px 7px; border: 1px solid var(--border-strong); border-radius: 4px;
+  display: inline-block;
 }
 
-.photo-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-  gap: 0.75rem;
-  margin-bottom: 0.5rem;
+/* ============== Composition group cards (Lightroom-style stacks) ============== */
+.groups-section {
+  margin-top: 0.5rem;
+  margin-bottom: 1rem;
 }
-.photo {
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  overflow: hidden;
-  background: var(--surface);
-  transition: transform 0.1s, box-shadow 0.15s;
+.groups-row {
+  display: flex; gap: 1.5rem;
+  overflow-x: auto;
+  padding: 1rem 0.25rem 1.25rem;
+  scroll-snap-type: x proximity;
 }
-.photo:hover { box-shadow: var(--shadow-md); }
-.photo.kept { border-color: var(--kept); border-width: 2px; }
-.photo.rejected { opacity: 0.75; }
-.photo .thumb-wrap {
-  aspect-ratio: 4 / 3;
-  background: var(--surface-alt);
+.groups-row::-webkit-scrollbar { height: 8px; }
+.groups-row::-webkit-scrollbar-track { background: var(--surface-alt); border-radius: 4px; }
+.groups-row::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 4px; }
+.groups-row::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+
+.group-card {
+  flex: 0 0 180px;
+  scroll-snap-align: start;
+  cursor: pointer;
   position: relative;
 }
-.photo .thumb-wrap img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  display: block;
+.group-card .stack {
+  position: relative;
+  width: 160px;
+  height: 120px;
+  margin: 0 auto;
+  transition: transform 0.15s;
 }
-.photo .rank-badge {
-  position: absolute; top: 8px; left: 8px;
-  background: rgba(31, 30, 26, 0.7);
-  color: white;
-  font-size: 0.7rem;
-  font-weight: 600;
-  padding: 2px 7px;
-  border-radius: 4px;
-  font-family: ui-monospace, monospace;
+.group-card:hover .stack { transform: translateY(-3px); }
+.group-card .stack .front {
+  position: relative;
+  z-index: 3;
+  width: 100%; height: 100%;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-alt);
+  box-shadow: 0 2px 6px rgba(31, 30, 26, 0.08);
 }
-.photo .verdict-badge {
+.group-card .stack .front img { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* Behind-layers via pseudo-elements when stack has ≥2 photos */
+.group-card .stack.multi::before {
+  content: ''; position: absolute; inset: 0; z-index: 2;
+  border-radius: 8px; background: white;
+  border: 1px solid var(--border-strong);
+  transform: translate(6px, 5px) rotate(2.5deg);
+  box-shadow: 0 1px 3px rgba(31, 30, 26, 0.06);
+}
+.group-card .stack.multi.deep::after {
+  content: ''; position: absolute; inset: 0; z-index: 1;
+  border-radius: 8px; background: #f0ebe0;
+  border: 1px solid var(--border);
+  transform: translate(11px, 9px) rotate(-1.8deg);
+  box-shadow: 0 1px 3px rgba(31, 30, 26, 0.05);
+}
+.group-card .stack .count-badge {
+  position: absolute; top: 8px; right: 8px; z-index: 4;
+  background: rgba(31, 30, 26, 0.78); color: white;
+  font-size: 0.72rem; font-weight: 600;
+  padding: 2px 8px; border-radius: 999px;
+  font-variant-numeric: tabular-nums;
+}
+.group-card .stack .kept-badge {
+  position: absolute; bottom: 8px; left: 8px; z-index: 4;
+  background: var(--kept); color: white;
+  font-size: 0.65rem; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 2px 7px; border-radius: 4px;
+}
+.group-card .stack .override-badge {
+  position: absolute; bottom: 8px; right: 8px; z-index: 4;
+  background: var(--accent); color: white;
+  font-size: 0.65rem; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 2px 7px; border-radius: 4px;
+}
+.group-card .meta {
+  margin-top: 1rem; text-align: center;
+  font-size: 0.78rem;
+}
+.group-card .meta .idx {
+  color: var(--muted); font-family: ui-monospace, monospace; font-size: 0.72rem;
+}
+.group-card .meta .filename {
+  color: var(--text); margin-top: 0.15rem; word-break: break-all;
+  font-size: 0.72rem;
+}
+
+/* ============== Group-detail modal ============== */
+.detail-modal { max-width: 1000px; width: 100%; }
+.detail-modal .modal-header { gap: 0.6rem; }
+.detail-modal .modal-header h3 {
+  display: flex; align-items: center; gap: 0.5rem;
+  font-size: 1rem;
+}
+.detail-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 1rem;
+}
+.detail-photo {
+  border: 1px solid var(--border); border-radius: 10px; overflow: hidden;
+  background: var(--surface); position: relative;
+  display: flex; flex-direction: column;
+}
+.detail-photo.kept { border-color: var(--kept); border-width: 2px; }
+.detail-photo.rejected { opacity: 0.85; }
+.detail-photo.rejected.keep-override { opacity: 1; border-color: var(--accent); border-width: 2px; }
+.detail-photo .thumb-wrap {
+  aspect-ratio: 4 / 3; background: var(--surface-alt); position: relative;
+}
+.detail-photo .thumb-wrap img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.detail-photo .verdict-badge {
   position: absolute; top: 8px; right: 8px;
-  font-size: 0.65rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  padding: 2px 7px;
-  border-radius: 4px;
-  color: white;
+  font-size: 0.62rem; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.04em; padding: 2px 7px; border-radius: 4px; color: white;
 }
-.photo .verdict-badge.kept { background: var(--kept); }
-.photo .verdict-badge.rejected { background: rgba(31, 30, 26, 0.55); }
-.photo .info {
-  padding: 0.5rem 0.65rem;
-  font-size: 0.75rem;
+.detail-photo .verdict-badge.kept { background: var(--kept); }
+.detail-photo .verdict-badge.rejected { background: rgba(31, 30, 26, 0.6); }
+.detail-photo .verdict-badge.override { background: var(--accent); }
+.detail-photo .info { padding: 0.65rem 0.75rem; font-size: 0.78rem; }
+.detail-photo .filename {
+  color: var(--text); font-weight: 500;
+  word-break: break-all; line-height: 1.3;
+  font-size: 0.78rem; margin-bottom: 0.4rem;
 }
-.photo .filename {
-  color: var(--text);
-  font-weight: 500;
-  margin-bottom: 0.25rem;
-  word-break: break-all;
-  line-height: 1.3;
-}
-.photo .score-line {
+.detail-photo .scores {
+  font-family: ui-monospace, monospace; font-size: 0.7rem;
   color: var(--muted);
-  font-family: ui-monospace, monospace;
-  font-size: 0.7rem;
-  display: flex;
-  justify-content: space-between;
+  display: grid; grid-template-columns: 1fr 1fr; gap: 0.15rem 0.5rem;
+  margin-bottom: 0.5rem;
 }
-.photo .score-line .final { color: var(--text); font-weight: 600; }
+.detail-photo .scores .label { color: var(--muted); }
+.detail-photo .scores .val { color: var(--text); }
+.detail-photo .scores .final-val { color: var(--accent-hover); font-weight: 600; }
+.detail-photo .actions { display: flex; gap: 0.4rem; }
+.detail-photo .actions button {
+  flex: 1;
+  padding: 0.35rem 0.6rem; font-size: 0.78rem; cursor: pointer;
+  font-family: inherit; border-radius: 6px;
+  background: var(--surface); color: var(--text);
+  border: 1px solid var(--border-strong);
+  transition: all 0.1s;
+}
+.detail-photo .actions button:hover { border-color: var(--accent); color: var(--accent); }
+.detail-photo .actions button.active {
+  background: var(--accent); color: white; border-color: var(--accent);
+}
+.detail-photo .actions button.active:hover { background: var(--accent-hover); color: white; }
+
+.detail-modal .modal-footer { gap: 0.75rem; flex-wrap: wrap; }
+.detail-modal .vlm-row { display: flex; gap: 0.4rem; align-items: center; }
+
+.apply-bar {
+  margin-top: 1rem; padding: 0.75rem 1rem;
+  background: var(--accent-tint); border: 1px solid #f0d7cd; border-radius: 8px;
+  display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.apply-bar .summary { font-size: 0.85rem; color: var(--text); }
+.apply-bar .summary strong { color: var(--accent-hover); }
+.apply-bar button.danger {
+  background: var(--accent); color: white; border: 0; border-radius: 6px;
+  padding: 0.45rem 0.95rem; font-size: 0.85rem; font-weight: 500;
+  font-family: inherit; cursor: pointer; transition: background 0.15s;
+}
+.apply-bar button.danger:hover { background: var(--accent-hover); }
+.apply-bar button.danger:disabled { background: #b8b5ac; cursor: not-allowed; }
+
+.apply-result {
+  margin-top: 0.75rem; padding: 0.7rem 0.9rem; border-radius: 6px;
+  font-size: 0.85rem;
+}
+.apply-result.success { background: var(--kept-tint); color: var(--kept); border: 1px solid #cfe2c4; }
+.apply-result.partial { background: #fff4e0; color: var(--warning); border: 1px solid #f5dfb0; }
+
+.confirm-modal { max-width: 480px; }
+.confirm-modal .modal-body p { margin: 0 0 0.75rem; font-size: 0.9rem; line-height: 1.5; }
+.confirm-modal .modal-body code {
+  background: var(--surface-alt); padding: 1px 6px; border-radius: 4px;
+  font-family: ui-monospace, monospace; font-size: 0.82rem; word-break: break-all;
+}
+.confirm-modal .options { margin: 0.75rem 0; }
+.confirm-modal .options label { display: flex; align-items: center; gap: 0.4rem; font-size: 0.85rem; padding: 0.3rem 0; cursor: pointer; }
+.confirm-modal .options input { accent-color: var(--accent); }
 
 .rejected-toggle {
-  margin: 0.5rem 0 0.75rem;
-  font-size: 0.8rem;
-  color: var(--muted);
-  background: none;
-  border: 0;
-  padding: 0;
-  cursor: pointer;
-  font-family: inherit;
+  margin: 0.5rem 0 0.75rem; font-size: 0.8rem; color: var(--muted);
+  background: none; border: 0; padding: 0; cursor: pointer; font-family: inherit;
 }
 .rejected-toggle:hover { color: var(--accent); }
 .rejected-toggle::before { content: '▸ '; transition: transform 0.1s; display: inline-block; }
@@ -350,69 +416,30 @@ select.inline {
 .rejected-list { display: none; }
 .rejected-list.open { display: block; }
 
-.explain-panel {
-  margin-top: 0.75rem;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  align-items: center;
-}
+.explain-panel { margin-top: 0.75rem; display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
 .explanation {
-  margin-top: 0.75rem;
-  background: var(--surface-alt);
-  border-left: 3px solid var(--accent);
-  border-radius: 0 8px 8px 0;
-  padding: 0.85rem 1rem;
-  font-size: 0.88rem;
-  line-height: 1.6;
-  white-space: pre-wrap;
+  margin-top: 0.75rem; background: var(--surface-alt);
+  border-left: 3px solid var(--accent); border-radius: 0 8px 8px 0;
+  padding: 0.85rem 1rem; font-size: 0.88rem; line-height: 1.6; white-space: pre-wrap;
 }
 .explanation .meta {
-  color: var(--muted);
-  font-size: 0.72rem;
-  font-family: ui-monospace, monospace;
-  margin-bottom: 0.4rem;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  color: var(--muted); font-size: 0.72rem; font-family: ui-monospace, monospace;
+  margin-bottom: 0.4rem; text-transform: uppercase; letter-spacing: 0.04em;
 }
 .explanation.loading { color: var(--muted); font-style: italic; }
 .explanation.error { border-left-color: var(--error); }
 
-.run-footer {
-  margin-top: 1.25rem;
-  padding-top: 1rem;
-  border-top: 1px solid var(--border);
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-}
-.run-footer a {
-  color: var(--accent);
-  text-decoration: none;
-  font-size: 0.85rem;
-}
+.run-footer { margin-top: 1.25rem; padding-top: 1rem; border-top: 1px solid var(--border);
+  display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.run-footer a { color: var(--accent); text-decoration: none; font-size: 0.85rem; }
 .run-footer a:hover { text-decoration: underline; }
 
 .error-message {
-  background: #fbe5e2;
-  border: 1px solid #f0c5bf;
-  border-radius: 8px;
-  padding: 0.75rem 1rem;
-  color: var(--error);
-  font-family: ui-monospace, monospace;
-  font-size: 0.8rem;
-  white-space: pre-wrap;
+  background: #fbe5e2; border: 1px solid #f0c5bf; border-radius: 8px;
+  padding: 0.75rem 1rem; color: var(--error);
+  font-family: ui-monospace, monospace; font-size: 0.8rem; white-space: pre-wrap;
 }
-
-.empty {
-  text-align: center;
-  color: var(--muted);
-  font-size: 0.9rem;
-  padding: 3rem 1rem;
-  font-style: italic;
-}
+.empty { text-align: center; color: var(--muted); font-size: 0.9rem; padding: 3rem 1rem; font-style: italic; }
 </style>
 </head>
 <body>
@@ -426,14 +453,25 @@ select.inline {
 <div class="card scan-card">
   <p class="section-label">Configure scan</p>
   <form id="scan-form">
-    <label class="field full">
-      <strong>Source directory</strong>
-      <input name="root" type="text" placeholder="/path/to/shoot" required>
-    </label>
-    <label class="field full">
-      <strong>Output directory</strong>
-      <input name="output" type="text" placeholder="/path/to/picks" required>
-    </label>
+    <div class="full">
+      <label class="field">
+        <strong>Source</strong>
+        <div class="input-with-button">
+          <input name="root" id="root-input" type="text" placeholder="/path/to/shoot (or /mnt/c/... in WSL)">
+          <button type="button" class="secondary" onclick="openBrowser('source')">Browse…</button>
+        </div>
+      </label>
+      <div id="source-summary"></div>
+    </div>
+    <div class="full">
+      <label class="field">
+        <strong>Output directory</strong>
+        <div class="input-with-button">
+          <input name="output" id="output-input" type="text" placeholder="/path/to/picks" required>
+          <button type="button" class="secondary" onclick="openBrowser('output')">Browse…</button>
+        </div>
+      </label>
+    </div>
     <label class="field">
       <strong>K1 — per burst</strong>
       <input name="k1" type="number" value="3" min="1" max="20">
@@ -447,12 +485,24 @@ select.inline {
       <input name="time_k" type="number" step="0.1" value="3.0">
     </label>
     <label class="field">
-      <strong>Stage B CLIP threshold</strong>
+      <strong>Stage A CLIP threshold (burst-tight)</strong>
+      <input name="stage_a_clip_threshold" type="number" step="0.01" value="0.95" min="0" max="1">
+    </label>
+    <label class="field">
+      <strong>Stage B CLIP threshold (composition)</strong>
       <input name="stage_b_threshold" type="number" step="0.01" value="0.93" min="0" max="1">
     </label>
     <label class="checkbox full">
       <input name="enable_clip" type="checkbox" checked>
       <span>Run CLIP (enables Stage B composition clustering)</span>
+    </label>
+    <label class="checkbox full">
+      <input name="enable_face" type="checkbox" checked>
+      <span>Run YuNet face detection (enables portrait scene weights)</span>
+    </label>
+    <label class="checkbox full">
+      <input name="in_place" type="checkbox">
+      <span><strong>In-place mode</strong> — skip generating <code>picked/</code> folders; you'll review and apply selections destructively to the source (rejected files go to OS trash by default)</span>
     </label>
     <div class="form-actions">
       <button type="submit" class="primary" id="submit-btn">Run scan</button>
@@ -463,25 +513,111 @@ select.inline {
 <p class="section-label">Runs</p>
 <div id="runs"></div>
 
+</div>
+
+<!-- Group detail modal -->
+<div class="modal-overlay" id="detail-overlay" onclick="if(event.target===this)closeDetail()">
+  <div class="modal detail-modal">
+    <div class="modal-header">
+      <h3 id="detail-title">composition</h3>
+      <button class="close" onclick="closeDetail()">×</button>
+    </div>
+    <div class="modal-body" id="detail-body"></div>
+    <div class="modal-footer">
+      <div id="detail-vlm" style="flex:1"></div>
+      <div class="actions">
+        <button class="secondary" onclick="closeDetail()">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Confirm (destructive action) modal -->
+<div class="modal-overlay" id="confirm-overlay" onclick="if(event.target===this)closeConfirm()">
+  <div class="modal confirm-modal">
+    <div class="modal-header">
+      <h3 id="confirm-title">Confirm</h3>
+      <button class="close" onclick="closeConfirm()">×</button>
+    </div>
+    <div class="modal-body" id="confirm-body"></div>
+    <div class="modal-footer">
+      <div></div>
+      <div class="actions">
+        <button class="secondary" onclick="closeConfirm()">Cancel</button>
+        <button class="primary" id="confirm-ok" onclick="fireConfirm()">Confirm</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Browse modal -->
+<div class="modal-overlay" id="modal-overlay" onclick="if(event.target===this)closeBrowser()">
+  <div class="modal">
+    <div class="modal-header">
+      <h3 id="modal-title">Select source</h3>
+      <button class="close" onclick="closeBrowser()">×</button>
+    </div>
+    <div class="modal-path">
+      <button class="secondary" onclick="browseUp()" id="up-btn" title="Go to parent">↑</button>
+      <input id="path-input" type="text" onkeydown="if(event.key==='Enter'){browseTo(this.value);event.preventDefault();}" placeholder="/path">
+      <button class="secondary" onclick="browseTo(document.getElementById('path-input').value)">Go</button>
+    </div>
+    <div class="modal-body" id="modal-body"></div>
+    <div class="modal-footer">
+      <div class="selection-info" id="selection-info"></div>
+      <div class="actions">
+        <button class="secondary" onclick="closeBrowser()">Cancel</button>
+        <button class="primary" id="confirm-btn" onclick="confirmBrowse()">Use this folder</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script>
+// State for the browse modal.
+let browseState = {
+  mode: 'source',        // 'source' or 'output'
+  currentPath: null,
+  files: [],             // full file list at current path
+  selectedFiles: new Set(),  // absolute paths chosen
+};
+// State carried into the scan form: explicit file selection (overrides root).
+let scanSelection = null; // { files: [...], summary: '...' }
+
 const form = document.getElementById('scan-form');
 const runsEl = document.getElementById('runs');
 const submitBtn = document.getElementById('submit-btn');
-const knownRuns = new Map(); // id -> {root, output}
+const knownRuns = new Map();
+
+// Per-run state for manual "keep" overrides on rejected photos.
+// Key = runId, value = Set of photo_ids the user wants to keep (i.e. NOT delete).
+const keepOverrides = new Map();
 
 form.addEventListener('submit', async (e) => {
   e.preventDefault();
   submitBtn.disabled = true;
   const fd = new FormData(form);
   const body = {
-    root: fd.get('root'),
     output: fd.get('output'),
     k1: parseInt(fd.get('k1')),
     k2: parseInt(fd.get('k2')),
     time_k: parseFloat(fd.get('time_k')),
+    stage_a_clip_threshold: parseFloat(fd.get('stage_a_clip_threshold')),
     stage_b_threshold: parseFloat(fd.get('stage_b_threshold')),
     enable_clip: fd.get('enable_clip') === 'on',
+    enable_face: fd.get('enable_face') === 'on',
+    in_place: fd.get('in_place') === 'on',
   };
+  if (scanSelection) {
+    body.files = scanSelection.files;
+  } else {
+    body.root = fd.get('root');
+    if (!body.root) {
+      alert('Pick a source folder or some files first.');
+      submitBtn.disabled = false;
+      return;
+    }
+  }
   try {
     const resp = await fetch('/api/scan', {
       method: 'POST',
@@ -490,15 +626,185 @@ form.addEventListener('submit', async (e) => {
     });
     if (!resp.ok) throw new Error(await resp.text());
     const { run_id } = await resp.json();
-    knownRuns.set(run_id, { root: body.root, output: body.output });
-    renderRunPlaceholder(run_id, body);
+    const sourceDesc = scanSelection ? scanSelection.summary : body.root;
+    knownRuns.set(run_id, { root: sourceDesc, output: body.output });
+    renderRunPlaceholder(run_id, { root: sourceDesc, output: body.output });
     pollRun(run_id);
   } catch (err) {
-    alert('Failed to start scan: ' + err.message);
+    alert('Failed to start scan: ' + (err.message || err));
   } finally {
     submitBtn.disabled = false;
   }
 });
+
+// ============== Browse modal ==============
+
+async function openBrowser(mode) {
+  browseState.mode = mode;
+  browseState.selectedFiles = new Set();
+  document.getElementById('modal-title').textContent =
+    mode === 'source' ? 'Select source folder or photos' : 'Select output folder';
+  document.getElementById('modal-overlay').classList.add('open');
+  await loadPath(browseState.currentPath || '');
+}
+
+function closeBrowser() {
+  document.getElementById('modal-overlay').classList.remove('open');
+}
+
+async function loadPath(path) {
+  const body = document.getElementById('modal-body');
+  body.innerHTML = '<div class="empty-msg">loading…</div>';
+  try {
+    const url = '/api/browse' + (path ? '?path=' + encodeURIComponent(path) : '');
+    const resp = await fetch(url);
+    if (!resp.ok) {
+      body.innerHTML = `<div class="error-msg">${escapeHtml(await resp.text())}</div>`;
+      return;
+    }
+    const data = await resp.json();
+    browseState.currentPath = data.current;
+    browseState.files = data.files;
+    browseState.selectedFiles.clear();
+    document.getElementById('path-input').value = data.current;
+    renderModalBody(data);
+    updateModalFooter();
+  } catch (err) {
+    body.innerHTML = `<div class="error-msg">${escapeHtml(err.toString())}</div>`;
+  }
+}
+
+function browseUp() {
+  // The server's response always includes `parent`, but for the click handler
+  // we rely on currentPath being canonical and walk up via the path input.
+  const cur = browseState.currentPath || '/';
+  const parent = cur.replace(/\/$/, '').replace(/\/[^/]*$/, '') || '/';
+  loadPath(parent);
+}
+
+function browseTo(p) {
+  if (p && p.trim()) loadPath(p.trim());
+}
+
+function renderModalBody(data) {
+  const body = document.getElementById('modal-body');
+  let html = '';
+
+  html += '<div class="modal-section-label">Folders</div>';
+  if (data.dirs.length === 0) {
+    html += '<div class="empty-msg">(no subfolders)</div>';
+  } else {
+    html += '<div class="dir-list">';
+    for (const d of data.dirs) {
+      html += `<div class="dir-item" onclick="loadPath('${encodeJs(d.path)}')">
+        <span class="icon">📁</span><span>${escapeHtml(d.name)}</span>
+      </div>`;
+    }
+    html += '</div>';
+  }
+
+  if (browseState.mode === 'source') {
+    html += `<div class="modal-section-label">Photos
+      ${data.files.length > 0 ? `<button class="secondary" style="margin-left:0.5rem; font-size:0.7rem; padding: 0.2rem 0.5rem;" onclick="toggleSelectAll()">Toggle all</button>` : ''}
+    </div>`;
+    if (data.files.length === 0) {
+      html += '<div class="empty-msg">(no photo files here)</div>';
+    } else {
+      html += '<div class="file-list">';
+      for (const f of data.files) {
+        html += `<label class="file-item" data-path="${escapeHtml(f.path)}">
+          <input type="checkbox" onchange="toggleFile('${encodeJs(f.path)}', this.checked, this.parentElement)">
+          <span class="name">${escapeHtml(f.name)}</span>
+          <span class="meta">${escapeHtml(f.format)} · ${formatBytes(f.size)}</span>
+        </label>`;
+      }
+      html += '</div>';
+    }
+  }
+
+  body.innerHTML = html;
+}
+
+function toggleFile(path, checked, el) {
+  if (checked) {
+    browseState.selectedFiles.add(path);
+    el.classList.add('selected');
+  } else {
+    browseState.selectedFiles.delete(path);
+    el.classList.remove('selected');
+  }
+  updateModalFooter();
+}
+
+function toggleSelectAll() {
+  const allChecked = browseState.files.every(f => browseState.selectedFiles.has(f.path));
+  const checkboxes = document.querySelectorAll('.file-item input[type="checkbox"]');
+  checkboxes.forEach((cb, i) => {
+    cb.checked = !allChecked;
+    toggleFile(browseState.files[i].path, !allChecked, cb.parentElement);
+  });
+}
+
+function updateModalFooter() {
+  const sel = browseState.selectedFiles.size;
+  const total = browseState.files.length;
+  const info = document.getElementById('selection-info');
+  const btn = document.getElementById('confirm-btn');
+  if (browseState.mode === 'output') {
+    info.textContent = '';
+    btn.textContent = 'Use this folder';
+  } else if (sel === 0) {
+    info.textContent = total > 0 ? `${total} photos in this folder` : '';
+    btn.textContent = total > 0 ? `Use this folder (${total} photos)` : 'Use this folder';
+  } else {
+    info.textContent = `${sel} of ${total} selected`;
+    btn.textContent = `Use selection (${sel} photos)`;
+  }
+}
+
+function confirmBrowse() {
+  if (browseState.mode === 'output') {
+    document.getElementById('output-input').value = browseState.currentPath;
+  } else if (browseState.selectedFiles.size > 0) {
+    const files = Array.from(browseState.selectedFiles);
+    scanSelection = {
+      files,
+      summary: `${files.length} photos from ${browseState.currentPath}`,
+    };
+    document.getElementById('root-input').value = '';
+    renderSourceSummary();
+  } else {
+    document.getElementById('root-input').value = browseState.currentPath;
+    scanSelection = null;
+    renderSourceSummary();
+  }
+  closeBrowser();
+}
+
+document.getElementById('root-input').addEventListener('input', () => {
+  // If the user types a path manually, clear any prior explicit selection.
+  if (scanSelection) {
+    scanSelection = null;
+    renderSourceSummary();
+  }
+});
+
+function renderSourceSummary() {
+  const el = document.getElementById('source-summary');
+  if (scanSelection) {
+    el.innerHTML = `<span class="selection-pill">${escapeHtml(scanSelection.summary)}
+      <button onclick="clearSelection()" title="clear">×</button></span>`;
+  } else {
+    el.innerHTML = '';
+  }
+}
+
+function clearSelection() {
+  scanSelection = null;
+  renderSourceSummary();
+}
+
+// ============== Runs (unchanged) ==============
 
 function renderRunPlaceholder(id, body) {
   let el = document.getElementById('run-' + id);
@@ -549,6 +855,8 @@ function renderRun(id, data) {
   const error = data.status?.error;
   const report = data.report;
   const picks = data.composition_picks || [];
+  const meta = knownRuns.get(id) || {};
+  const sourceDesc = meta.root || data.root || '';
 
   let html = `
     <div class="run-head">
@@ -556,7 +864,7 @@ function renderRun(id, data) {
       <h3>${state === 'completed' ? 'scan complete' : state === 'failed' ? 'scan failed' : 'scan in progress'}</h3>
       <code>${id.slice(0,8)}</code>
     </div>
-    <div class="run-meta">${escapeHtml(data.root || '')} → ${escapeHtml(data.output || '')}</div>
+    <div class="run-meta">${escapeHtml(sourceDesc)} → ${escapeHtml(data.output || '')}</div>
   `;
 
   if (report) {
@@ -571,104 +879,273 @@ function renderRun(id, data) {
     </div>`;
   }
 
-  for (const pick of picks) {
-    html += renderCompositionGroup(id, pick);
+  const inPlace = !!data.in_place;
+  if (picks.length > 0) {
+    html += `<div class="groups-section"><div class="groups-row">
+      ${picks.map(p => renderGroupCard(id, p)).join('')}
+    </div></div>`;
   }
-
-  if (error) {
-    html += `<div class="error-message">${escapeHtml(error)}</div>`;
+  if (error) html += `<div class="error-message">${escapeHtml(error)}</div>`;
+  if (state === 'completed' && inPlace && picks.length > 0) {
+    html += renderApplyBar(id, picks);
   }
-
   if (state === 'completed') {
-    html += `<div class="run-footer">
-      <a href="/api/runs/${id}/html" target="_blank">Open full HTML report →</a>
-    </div>`;
+    html += `<div class="run-footer"><a href="/api/runs/${id}/html" target="_blank">Open full HTML report →</a></div>`;
   }
-
   el.innerHTML = html;
+}
+
+function renderApplyBar(runId, picks) {
+  const allRejected = picks.flatMap(p => p.rejected.map(r => r.photo_id));
+  const overrides = keepOverrides.get(runId) || new Set();
+  const toDelete = allRejected.filter(id => !overrides.has(id));
+  return `
+    <div class="apply-bar" id="apply-bar-${runId}">
+      <div class="summary">
+        Will delete <strong>${toDelete.length}</strong> rejected file${toDelete.length === 1 ? '' : 's'} from the source directory.
+        ${overrides.size > 0 ? ` (${overrides.size} kept by override)` : ''}
+      </div>
+      <button class="danger" ${toDelete.length === 0 ? 'disabled' : ''} onclick="confirmApply('${runId}')">
+        Apply (delete ${toDelete.length} files)
+      </button>
+    </div>
+    <div id="apply-result-${runId}"></div>
+  `;
 }
 
 function renderFailed(id, msg) {
   renderRun(id, { status: { state: 'failed', error: msg }, root: knownRuns.get(id)?.root, output: knownRuns.get(id)?.output });
 }
 
-function renderCompositionGroup(runId, pick) {
+function renderGroupCard(runId, pick) {
+  const total = pick.kept.length + pick.rejected.length;
+  const stackClass = total >= 3 ? 'stack multi deep' : total === 2 ? 'stack multi' : 'stack';
+  const rep = pick.kept[0] || pick.rejected[0];
+  const thumb = rep ? `/api/runs/${runId}/thumb/${rep.photo_id}` : '';
+  const overrides = keepOverrides.get(runId) || new Set();
+  const overrideCount = pick.rejected.filter(r => overrides.has(r.photo_id)).length;
+  return `
+    <div class="group-card" onclick="openGroupModal('${runId}', ${pick.index})">
+      <div class="${stackClass}">
+        <div class="front">
+          ${thumb ? `<img loading="lazy" src="${thumb}" alt="">` : ''}
+        </div>
+        <span class="count-badge">${total} photo${total === 1 ? '' : 's'}</span>
+        <span class="kept-badge">${pick.kept.length} kept</span>
+        ${overrideCount > 0 ? `<span class="override-badge">+${overrideCount}</span>` : ''}
+      </div>
+      <div class="meta">
+        <div class="idx">#${pick.index} · ${escapeHtml(pick.scene)}</div>
+        <div class="filename">${escapeHtml(rep ? rep.filename : '(empty)')}</div>
+      </div>
+    </div>
+  `;
+}
+
+// Currently-open group detail (so toggles can re-render it).
+let detailContext = null;  // { runId, pickIndex }
+
+async function openGroupModal(runId, idx) {
+  detailContext = { runId, pickIndex: idx };
+  const overlay = document.getElementById('detail-overlay');
+  document.getElementById('detail-body').innerHTML = '<div class="empty-msg" style="padding:2rem">loading…</div>';
+  document.getElementById('detail-title').textContent = `composition #${idx}`;
+  overlay.classList.add('open');
+  await renderDetail();
+}
+
+function closeDetail() {
+  document.getElementById('detail-overlay').classList.remove('open');
+  detailContext = null;
+}
+
+async function renderDetail() {
+  if (!detailContext) return;
+  const { runId, pickIndex } = detailContext;
+  const data = await fetch('/api/runs/' + runId).then(r => r.json());
+  const inPlace = !!data.in_place;
+  const pick = (data.composition_picks || [])[pickIndex];
+  if (!pick) {
+    document.getElementById('detail-body').innerHTML = '<div class="error-msg">group not found</div>';
+    return;
+  }
+  const overrides = keepOverrides.get(runId) || new Set();
+  const total = pick.kept.length + pick.rejected.length;
+  document.getElementById('detail-title').innerHTML =
+    `composition #${pickIndex} <span class="scene-tag">${escapeHtml(pick.scene)}</span>
+     <span class="stat-pill"><span class="label">photos</span><span class="value">${total}</span></span>
+     <span class="stat-pill"><span class="label">kept</span><span class="value">${pick.kept.length + overrides.size}</span></span>`;
+
   const renderPhoto = (p, isKept) => {
     const fs = p.final_score || {};
     const thumb = `/api/runs/${runId}/thumb/${p.photo_id}`;
+    const overridden = !isKept && overrides.has(p.photo_id);
+    const badgeKind = isKept ? 'kept' : (overridden ? 'override' : 'rejected');
+    const badgeText = isKept ? 'kept' : (overridden ? 'keep override' : 'rejected');
+    const sceneVal = (typeof fs.aesthetic === 'number') ? fmt(fs.aesthetic) : '–';
+    const actions = (!isKept && inPlace) ? `
+      <div class="actions">
+        <button class="${overridden ? 'active' : ''}"
+                onclick="event.stopPropagation(); toggleKeepOverride('${runId}', '${p.photo_id}')">
+          ${overridden ? '✓ keeping (click to drop)' : '＋ keep this anyway'}
+        </button>
+      </div>` : '';
     return `
-      <div class="photo ${isKept ? 'kept' : 'rejected'}">
+      <div class="detail-photo ${isKept ? 'kept' : 'rejected'} ${overridden ? 'keep-override' : ''}">
         <div class="thumb-wrap">
           <img loading="lazy" src="${thumb}" alt="${escapeHtml(p.filename || '')}">
-          <span class="verdict-badge ${isKept ? 'kept' : 'rejected'}">${isKept ? 'kept' : 'rejected'}</span>
+          <span class="verdict-badge ${badgeKind}">${badgeText}</span>
         </div>
         <div class="info">
           <div class="filename">${escapeHtml(p.filename || p.photo_id.slice(0,8))}</div>
-          <div class="score-line">
-            <span>tech ${fmt(fs.tech)} · face ${fmt(fs.face_bonus)}</span>
-            <span class="final">${fmt(fs.value)}</span>
+          <div class="scores">
+            <span class="label">final</span><span class="val final-val">${fmt(fs.value)}</span>
+            <span class="label">tech</span><span class="val">${fmt(fs.tech)}</span>
+            <span class="label">aesthetic</span><span class="val">${sceneVal}</span>
+            <span class="label">composition</span><span class="val">${fmt(fs.composition)}</span>
+            <span class="label">face bonus</span><span class="val">${fmt(fs.face_bonus)}</span>
           </div>
+          ${actions}
         </div>
-      </div>
-    `;
+      </div>`;
   };
 
-  const keptHtml = pick.kept.map(p => renderPhoto(p, true)).join('');
-  const rejectedHtml = pick.rejected.map(p => renderPhoto(p, false)).join('');
-  const rejToggleId = `rejtoggle-${runId}-${pick.index}`;
-  const rejListId = `rejlist-${runId}-${pick.index}`;
+  const photosHtml = [
+    ...pick.kept.map(p => renderPhoto(p, true)),
+    ...pick.rejected.map(p => renderPhoto(p, false)),
+  ].join('');
 
-  return `
-    <section class="comp-group">
-      <div class="comp-group-head">
-        <h4>composition #${pick.index}</h4>
-        <span class="scene-tag">${escapeHtml(pick.scene)}</span>
-        <span class="stat-pill" style="margin-left:auto">
-          <span class="label">kept</span><span class="value">${pick.kept.length}/${pick.kept.length + pick.rejected.length}</span>
-        </span>
-      </div>
-      <div class="photo-grid">${keptHtml}</div>
-      ${pick.rejected.length > 0 ? `
-        <button class="rejected-toggle" id="${rejToggleId}"
-          onclick="toggleRejected('${rejToggleId}', '${rejListId}')">show ${pick.rejected.length} rejected</button>
-        <div class="rejected-list" id="${rejListId}">
-          <div class="photo-grid">${rejectedHtml}</div>
-        </div>
-      ` : ''}
-      ${renderExplainBlock(runId, pick.index)}
-    </section>
-  `;
-}
-
-function renderExplainBlock(runId, idx) {
-  return `
-    <div class="explain-panel">
-      <select class="inline" id="prov-${runId}-${idx}">
+  document.getElementById('detail-body').innerHTML = `<div class="detail-grid">${photosHtml}</div>`;
+  document.getElementById('detail-vlm').innerHTML = `
+    <div class="vlm-row">
+      <select class="inline" id="detail-prov">
         <option value="openai">OpenAI</option>
         <option value="anthropic">Anthropic</option>
       </select>
-      <button class="secondary" onclick="askExplain('${runId}', ${idx})">Ask VLM why</button>
+      <button class="secondary" onclick="askExplainInDetail('${runId}', ${pickIndex})">Ask VLM why</button>
     </div>
-    <div id="exp-${runId}-${idx}"></div>
+    <div id="detail-vlm-out"></div>
   `;
 }
 
-function toggleRejected(toggleId, listId) {
-  const t = document.getElementById(toggleId);
-  const l = document.getElementById(listId);
-  if (l.classList.contains('open')) {
-    l.classList.remove('open'); t.classList.remove('open');
-    t.textContent = `show ${l.querySelectorAll('.photo').length} rejected`;
-  } else {
-    l.classList.add('open'); t.classList.add('open');
-    t.textContent = `hide rejected`;
+async function askExplainInDetail(runId, idx) {
+  const provider = document.getElementById('detail-prov').value;
+  const out = document.getElementById('detail-vlm-out');
+  out.innerHTML = `<div class="explanation loading"><div class="meta">${escapeHtml(provider)} · thinking…</div></div>`;
+  try {
+    const resp = await fetch(`/api/runs/${runId}/explain`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ composition_index: idx, provider }),
+    });
+    const text = await resp.text();
+    if (!resp.ok) {
+      out.innerHTML = `<div class="explanation error"><div class="meta">${escapeHtml(provider)} · failed</div>${escapeHtml(text)}</div>`;
+      return;
+    }
+    const data = JSON.parse(text);
+    out.innerHTML = `<div class="explanation"><div class="meta">${escapeHtml(data.provider)} / ${escapeHtml(data.model)}</div>${escapeHtml(data.text)}</div>`;
+  } catch (err) {
+    out.innerHTML = `<div class="explanation error"><div class="meta">network error</div>${escapeHtml(err.toString())}</div>`;
   }
+}
+
+function toggleKeepOverride(runId, photoId) {
+  if (!keepOverrides.has(runId)) keepOverrides.set(runId, new Set());
+  const set = keepOverrides.get(runId);
+  if (set.has(photoId)) set.delete(photoId);
+  else set.add(photoId);
+  // Re-render the run card (updates override count badges) and the detail
+  // modal if it's open on this run.
+  fetch('/api/runs/' + runId).then(r => r.json()).then(d => renderRun(runId, d));
+  if (detailContext && detailContext.runId === runId) {
+    renderDetail();
+  }
+}
+
+async function confirmApply(runId) {
+  const data = await fetch('/api/runs/' + runId).then(r => r.json());
+  const picks = data.composition_picks || [];
+  const overrides = keepOverrides.get(runId) || new Set();
+  const allRejected = picks.flatMap(p => p.rejected.map(r => r.photo_id));
+  const toDelete = allRejected.filter(id => !overrides.has(id));
+  const sourcePath = data.root || '';
+
+  showConfirmModal({
+    title: 'Apply selection',
+    body: `
+      <p>About to send <strong>${toDelete.length}</strong> files to the system trash from:</p>
+      <p><code>${escapeHtml(sourcePath)}</code></p>
+      <p style="color: var(--muted); font-size: 0.82rem;">
+        ${overrides.size} rejected photos will be <strong>kept</strong> due to your manual override.
+        Kept picks are untouched.
+      </p>
+      <div class="options">
+        <label><input type="radio" name="apply-mode" value="trash" checked> Send to system trash (recoverable)</label>
+        <label><input type="radio" name="apply-mode" value="delete"> Delete permanently (no recovery)</label>
+      </div>
+    `,
+    confirmText: `Apply to ${toDelete.length} files`,
+    onConfirm: async () => {
+      const mode = document.querySelector('input[name="apply-mode"]:checked').value;
+      await executeApply(runId, toDelete, mode === 'trash');
+    },
+  });
+}
+
+async function executeApply(runId, deleteIds, useTrash) {
+  const out = document.getElementById('apply-result-' + runId);
+  if (out) out.innerHTML = '<div class="apply-result">applying…</div>';
+  try {
+    const resp = await fetch(`/api/runs/${runId}/apply`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ delete_ids: deleteIds, use_trash: useTrash }),
+    });
+    const text = await resp.text();
+    if (!resp.ok) {
+      if (out) out.innerHTML = `<div class="apply-result partial">apply failed: ${escapeHtml(text)}</div>`;
+      return;
+    }
+    const r = JSON.parse(text);
+    const cls = r.failed.length === 0 ? 'success' : 'partial';
+    let msg = `${r.deleted} of ${r.requested} files ${r.used_trash ? 'moved to trash' : 'deleted'}.`;
+    if (r.failed.length > 0) {
+      msg += ` ${r.failed.length} failed: ` + r.failed.slice(0, 3).map(f => f.path.split('/').pop() + ' (' + f.error + ')').join(', ');
+      if (r.failed.length > 3) msg += `, +${r.failed.length - 3} more`;
+    }
+    if (out) out.innerHTML = `<div class="apply-result ${cls}">${escapeHtml(msg)}</div>`;
+    // Disable the apply button now that work's done.
+    const bar = document.getElementById('apply-bar-' + runId);
+    if (bar) bar.querySelector('button.danger').disabled = true;
+  } catch (err) {
+    if (out) out.innerHTML = `<div class="apply-result partial">network error: ${escapeHtml(err.toString())}</div>`;
+  }
+}
+
+let _confirmCb = null;
+function showConfirmModal({ title, body, confirmText, onConfirm }) {
+  const overlay = document.getElementById('confirm-overlay');
+  document.getElementById('confirm-title').textContent = title;
+  document.getElementById('confirm-body').innerHTML = body;
+  document.getElementById('confirm-ok').textContent = confirmText || 'Confirm';
+  _confirmCb = onConfirm;
+  overlay.classList.add('open');
+}
+function closeConfirm() {
+  document.getElementById('confirm-overlay').classList.remove('open');
+  _confirmCb = null;
+}
+async function fireConfirm() {
+  const cb = _confirmCb;
+  closeConfirm();
+  if (cb) await cb();
 }
 
 async function askExplain(runId, idx) {
   const provider = document.getElementById(`prov-${runId}-${idx}`).value;
   const out = document.getElementById(`exp-${runId}-${idx}`);
-  out.innerHTML = `<div class="explanation loading"><div class="meta">${escapeHtml(provider)} · thinking...</div></div>`;
+  out.innerHTML = `<div class="explanation loading"><div class="meta">${escapeHtml(provider)} · thinking…</div></div>`;
   try {
     const resp = await fetch(`/api/runs/${runId}/explain`, {
       method: 'POST',
@@ -688,14 +1165,21 @@ async function askExplain(runId, idx) {
 }
 
 function fmt(v) { return v == null ? '–' : v.toFixed(2); }
+function formatBytes(n) {
+  if (n < 1024) return n + ' B';
+  if (n < 1024*1024) return (n/1024).toFixed(0) + ' KB';
+  if (n < 1024*1024*1024) return (n/1024/1024).toFixed(1) + ' MB';
+  return (n/1024/1024/1024).toFixed(2) + ' GB';
+}
 function escapeHtml(s) {
   return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function encodeJs(s) {
+  return String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 }
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 function removeEmpty() { const e = document.getElementById('empty-state'); if (e) e.remove(); }
 
-// Initial load: existing runs (e.g. after server restart we'd lose state, but
-// this still picks up runs from this session).
 (async () => {
   try {
     const resp = await fetch('/api/runs');
@@ -709,11 +1193,8 @@ function removeEmpty() { const e = document.getElementById('empty-state'); if (e
       const resp = await fetch('/api/runs/' + r.id);
       if (resp.ok) renderRun(r.id, await resp.json());
     }
-  } catch (e) {
-    console.error(e);
-  }
+  } catch (e) { console.error(e); }
 })();
 </script>
-</div>
 </body>
 </html>

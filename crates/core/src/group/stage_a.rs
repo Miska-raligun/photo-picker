@@ -13,8 +13,14 @@ pub struct StageAParams {
     /// Upper bound for the time window (avoids the small-sample case where a single
     /// large gap inflates the median and merges unrelated photos).
     pub max_dt: Duration,
-    /// Max pHash Hamming distance to consider two photos near-duplicates.
+    /// pHash Hamming distance fallback threshold (used only when CLIP embeddings
+    /// aren't available for a pair).
     pub max_hash_dist: u32,
+    /// CLIP cosine similarity threshold for "this really is the same burst"
+    /// — strictly tighter than Stage B's threshold because true burst frames
+    /// are nearly identical. Used preferentially over pHash when CLIP embeds
+    /// are present (which they always are once M3.2 is on).
+    pub clip_threshold: f32,
 }
 
 impl Default for StageAParams {
@@ -24,6 +30,7 @@ impl Default for StageAParams {
             min_dt: Duration::from_millis(300),
             max_dt: Duration::from_secs(30),
             max_hash_dist: 6,
+            clip_threshold: 0.95,
         }
     }
 }
@@ -69,7 +76,17 @@ pub fn cluster_stage_a(
             let (Some(fa), Some(fb)) = (features.get(&a.id), features.get(&b.id)) else {
                 continue;
             };
-            if hamming(fa.phash, fb.phash) <= params.max_hash_dist {
+            // Prefer CLIP cosine similarity — pHash gives too many false
+            // positives (high-contrast scenes hash similarly even when their
+            // content is unrelated, and pHash similarity isn't transitive so
+            // chained adjacent merges can drag in visually different photos).
+            let should_merge = match (&fa.clip_embed, &fb.clip_embed) {
+                (Some(ea), Some(eb)) if ea.len() == eb.len() => {
+                    cosine_normalized(ea, eb) > params.clip_threshold
+                }
+                _ => hamming(fa.phash, fb.phash) <= params.max_hash_dist,
+            };
+            if should_merge {
                 uf.union(i, i + 1);
             }
         }
@@ -105,6 +122,11 @@ fn compute_delta_t(timed_sorted: &[&PhotoRef], params: &StageAParams) -> f32 {
     proposed
         .max(params.min_dt.as_secs_f32())
         .min(params.max_dt.as_secs_f32())
+}
+
+/// Dot product on L2-normalized vectors == cosine similarity.
+fn cosine_normalized(a: &[f32], b: &[f32]) -> f32 {
+    a.iter().zip(b).map(|(x, y)| x * y).sum()
 }
 
 fn seconds_between(a: &PhotoRef, b: &PhotoRef) -> f32 {

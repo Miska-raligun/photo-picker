@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use indicatif::{ProgressBar, ProgressStyle};
 use photo_pick_core::group::{StageAParams, StageBParams};
-use photo_pick_core::ingest::ThumbnailSpec;
+use photo_pick_core::ingest::{PhotoSource, ThumbnailSpec};
 use photo_pick_core::models::ExecutionProvider;
 use photo_pick_core::pipeline::{LinkMode, NoopProgress, Pipeline, PipelineConfig, ProgressSink, Stage};
 use photo_pick_core::scoring::TechWeights;
@@ -68,9 +68,14 @@ struct ScanArgs {
     #[arg(long)]
     no_face: bool,
 
-    /// Stage A maximum pHash Hamming distance.
+    /// Stage A maximum pHash Hamming distance (fallback when CLIP off).
     #[arg(long, default_value_t = 6)]
     hash_dist: u32,
+
+    /// Stage A CLIP cosine similarity threshold for "same burst" — tighter
+    /// than the Stage B threshold because real bursts are nearly identical.
+    #[arg(long, default_value_t = 0.95)]
+    stage_a_clip_threshold: f32,
 
     /// Parallel worker count (default: physical CPUs).
     #[arg(short, long)]
@@ -170,7 +175,7 @@ fn run_scan(args: ScanArgs) -> Result<()> {
     };
 
     let cfg = PipelineConfig {
-        root: args.root.clone(),
+        source: PhotoSource::Directory(args.root.clone()),
         output: args.output.clone(),
         report_path,
         html_report_path,
@@ -180,6 +185,7 @@ fn run_scan(args: ScanArgs) -> Result<()> {
             min_dt: Duration::from_secs_f32(args.min_dt),
             max_dt: Duration::from_secs_f32(args.max_dt),
             max_hash_dist: args.hash_dist,
+            clip_threshold: args.stage_a_clip_threshold,
         },
         stage_b: StageBParams {
             similarity_threshold: args.stage_b_threshold,
@@ -192,6 +198,7 @@ fn run_scan(args: ScanArgs) -> Result<()> {
         dry_run: args.dry_run,
         enable_clip: !args.no_clip,
         enable_face: !args.no_face,
+        materialize_picks: true,
         execution_provider: ExecutionProvider::Cpu,
     };
 

@@ -4,7 +4,7 @@ mod scanner;
 
 pub use decoder::{decode_thumbnail, decode_thumbnail_for, encode_jpeg, ThumbnailSpec};
 pub use exif::ExifInfo;
-pub use scanner::{FsScanner, Scanner};
+pub use scanner::{classify_extension, scan_files, FsScanner, PhotoSource, Scanner};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

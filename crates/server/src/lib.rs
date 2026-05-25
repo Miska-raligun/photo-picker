@@ -5,6 +5,7 @@
 //! pool so the async runtime stays responsive.
 
 pub mod app;
+pub mod assets;
 pub mod handlers;
 pub mod state;
 

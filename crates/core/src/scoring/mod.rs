@@ -16,8 +16,8 @@ pub mod scene;
 pub mod sharpness;
 pub mod wb;
 
-pub use aesthetic::{AestheticScorer, NeutralAestheticStub};
-pub use composition::{CompositionScorer, NeutralCompositionStub};
+pub use aesthetic::{AestheticScorer, HeuristicAestheticScorer, NeutralAestheticStub};
+pub use composition::{CompositionScorer, HeuristicCompositionScorer, NeutralCompositionStub};
 pub use face::{FaceBox, FaceDetector, FaceInfo, NoFaceDetectorStub};
 pub use face_yunet::YunetFaceDetector;
 pub use scene::{classify_scene, FinalWeights, Scene};

@@ -6,7 +6,7 @@ use serde_json::json;
 use std::time::Duration;
 
 const DEFAULT_MODEL: &str = "claude-opus-4-7";
-const ENDPOINT: &str = "https://api.anthropic.com/v1/messages";
+const DEFAULT_ENDPOINT: &str = "https://api.anthropic.com/v1/messages";
 const API_VERSION: &str = "2023-06-01";
 
 pub struct AnthropicProvider {
@@ -16,16 +16,21 @@ pub struct AnthropicProvider {
 }
 
 impl AnthropicProvider {
-    /// Construct from `ANTHROPIC_API_KEY`. `ANTHROPIC_MODEL` overrides the
-    /// default model.
+    /// Construct from environment.
+    ///
+    /// - `ANTHROPIC_API_KEY` (required) — x-api-key value.
+    /// - `ANTHROPIC_MODEL` (optional) — defaults to `claude-opus-4-7`.
+    /// - `ANTHROPIC_BASE_URL` (optional) — full messages endpoint.
     pub fn from_env() -> Result<Self> {
         let api_key = std::env::var("ANTHROPIC_API_KEY")
             .map_err(|_| Error::Config("ANTHROPIC_API_KEY not set".into()))?;
         let model = std::env::var("ANTHROPIC_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.into());
+        let base_url = std::env::var("ANTHROPIC_BASE_URL")
+            .unwrap_or_else(|_| DEFAULT_ENDPOINT.into());
         Ok(Self {
             api_key,
             model,
-            base_url: ENDPOINT.into(),
+            base_url,
         })
     }
 
@@ -38,6 +43,18 @@ impl AnthropicProvider {
         self.base_url = url.into();
         self
     }
+
+    pub fn from_parts(
+        api_key: impl Into<String>,
+        model: impl Into<String>,
+        base_url: impl Into<String>,
+    ) -> Self {
+        Self {
+            api_key: api_key.into(),
+            model: model.into(),
+            base_url: base_url.into(),
+        }
+    }
 }
 
 impl VlmProvider for AnthropicProvider {
@@ -45,8 +62,14 @@ impl VlmProvider for AnthropicProvider {
     fn model(&self) -> &str { &self.model }
 
     fn complete(&self, req: &VlmRequest) -> Result<String> {
-        let mut content_parts: Vec<serde_json::Value> = Vec::with_capacity(req.images.len() + 1);
-        for img in &req.images {
+        // Label-then-image interleave; main prompt last so it acts as the
+        // instruction over all attached evidence.
+        let mut content_parts: Vec<serde_json::Value> = Vec::with_capacity(req.images.len() * 2 + 1);
+        for (i, img) in req.images.iter().enumerate() {
+            content_parts.push(json!({
+                "type": "text",
+                "text": format!("Image {} ({}):", i + 1, img.label)
+            }));
             let b64 = base64::engine::general_purpose::STANDARD.encode(&img.jpeg_bytes);
             content_parts.push(json!({
                 "type": "image",
@@ -68,8 +91,16 @@ impl VlmProvider for AnthropicProvider {
             body["system"] = json!(sys);
         }
 
+        tracing::info!(
+            base_url = %self.base_url,
+            model = %self.model,
+            n_images = req.images.len(),
+            "vlm anthropic request start"
+        );
+        let start = std::time::Instant::now();
         let agent: ureq::Agent = ureq::Agent::config_builder()
-            .timeout_global(Some(Duration::from_secs(120)))
+            .timeout_global(Some(Duration::from_secs(180)))
+            .proxy(ureq::Proxy::try_from_env())
             .build()
             .into();
 
@@ -79,7 +110,15 @@ impl VlmProvider for AnthropicProvider {
             .header("anthropic-version", API_VERSION)
             .header("content-type", "application/json")
             .send_json(&body)
-            .map_err(|e| Error::Config(format!("anthropic request: {e}")))?;
+            .map_err(|e| {
+                tracing::warn!(elapsed_ms = start.elapsed().as_millis() as u64, %e, "vlm anthropic request failed");
+                Error::Config(format!("anthropic request: {e}"))
+            })?;
+        tracing::info!(
+            elapsed_ms = start.elapsed().as_millis() as u64,
+            status = resp.status().as_u16(),
+            "vlm anthropic response"
+        );
 
         let parsed: MessagesResponse = resp
             .body_mut()

@@ -19,7 +19,8 @@ use std::path::Path;
 /// rows are ignored (and silently re-extracted on next run).
 /// - v1: M4.1 initial (technical scores + CLIP embed + face stub data)
 /// - v2: M3.5-real YuNet face detection wired in — old rows have empty face data
-pub const FEATURE_SCHEMA_VERSION: i64 = 2;
+/// - v3: real composition + aesthetic heuristics replace 0.5 stubs
+pub const FEATURE_SCHEMA_VERSION: i64 = 3;
 
 pub struct CacheStore {
     conn: Connection,

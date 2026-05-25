@@ -3,7 +3,9 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse, Json};
 use photo_pick_core::group::{StageAParams, StageBParams};
-use photo_pick_core::ingest::{decode_thumbnail_for, encode_jpeg, ThumbnailSpec};
+use photo_pick_core::ingest::{
+    classify_extension, decode_thumbnail_for, encode_jpeg, PhotoSource, ThumbnailSpec,
+};
 use photo_pick_core::models::ExecutionProvider;
 use photo_pick_core::pipeline::{LinkMode, NoopProgress, Pipeline, PipelineConfig};
 use photo_pick_core::scoring::TechWeights;
@@ -16,15 +18,18 @@ use std::path::PathBuf;
 use std::time::Duration;
 use uuid::Uuid;
 
-const INDEX_HTML: &str = include_str!("../static/index.html");
-
-pub async fn index() -> impl IntoResponse {
-    Html(INDEX_HTML)
-}
+// The `/` index handler now lives in `crate::assets::index` (serves the
+// React build). The old single-file HTML is kept on disk as a reference but
+// no longer compiled in.
 
 #[derive(Debug, Deserialize)]
 pub struct ScanRequest {
-    pub root: PathBuf,
+    /// Scan an entire directory. Mutually exclusive with `files`.
+    pub root: Option<PathBuf>,
+    /// Scan only this explicit list of file paths. Mutually exclusive with
+    /// `root`.
+    #[serde(default)]
+    pub files: Vec<PathBuf>,
     pub output: PathBuf,
     #[serde(default = "default_k1")]
     pub k1: usize,
@@ -40,10 +45,17 @@ pub struct ScanRequest {
     pub hash_dist: u32,
     #[serde(default = "default_threshold")]
     pub stage_b_threshold: f32,
+    #[serde(default = "default_stage_a_clip")]
+    pub stage_a_clip_threshold: f32,
     #[serde(default = "default_clip")]
     pub enable_clip: bool,
     #[serde(default = "default_face")]
     pub enable_face: bool,
+    /// "In-place" review workflow: don't copy picks/rejected into `output`;
+    /// the user will apply selections destructively to the source via
+    /// `/api/runs/:id/apply`.
+    #[serde(default)]
+    pub in_place: bool,
 }
 
 fn default_k1() -> usize { 3 }
@@ -53,6 +65,7 @@ fn default_min_dt() -> f32 { 0.3 }
 fn default_max_dt() -> f32 { 30.0 }
 fn default_hash_dist() -> u32 { 6 }
 fn default_threshold() -> f32 { 0.93 }
+fn default_stage_a_clip() -> f32 { 0.95 }
 fn default_clip() -> bool { true }
 fn default_face() -> bool { true }
 
@@ -61,7 +74,19 @@ fn default_face() -> bool { true }
 pub async fn scan(
     State(state): State<AppState>,
     Json(req): Json<ScanRequest>,
-) -> Json<serde_json::Value> {
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let source = match (&req.root, req.files.is_empty()) {
+        (Some(r), true) => PhotoSource::Directory(r.clone()),
+        (None, false) => PhotoSource::Files(req.files.clone()),
+        (Some(_), false) => {
+            return Err((StatusCode::BAD_REQUEST, "specify either `root` or `files`, not both".into()));
+        }
+        (None, true) => {
+            return Err((StatusCode::BAD_REQUEST, "must specify `root` or `files`".into()));
+        }
+    };
+    let display_root = source.root_hint();
+
     let run_id = Uuid::new_v4().to_string();
 
     let html_report_path = req.output.join("report.html");
@@ -70,8 +95,9 @@ pub async fn scan(
 
     let record = RunRecord {
         id: run_id.clone(),
-        root: req.root.clone(),
+        root: display_root,
         output: req.output.clone(),
+        in_place: req.in_place,
         status: RunStatus::Running,
         report: None,
         html_report: None,
@@ -84,10 +110,11 @@ pub async fn scan(
     let runs = state.runs.clone();
     let run_id_for_task = run_id.clone();
     let req_for_task = req;
+    let source_for_task = source;
 
     tokio::task::spawn_blocking(move || {
         let cfg = PipelineConfig {
-            root: req_for_task.root.clone(),
+            source: source_for_task,
             output: req_for_task.output.clone(),
             report_path: Some(report_path),
             html_report_path: Some(html_report_path.clone()),
@@ -97,6 +124,7 @@ pub async fn scan(
                 min_dt: Duration::from_secs_f32(req_for_task.min_dt),
                 max_dt: Duration::from_secs_f32(req_for_task.max_dt),
                 max_hash_dist: req_for_task.hash_dist,
+                clip_threshold: req_for_task.stage_a_clip_threshold,
             },
             stage_b: StageBParams {
                 similarity_threshold: req_for_task.stage_b_threshold,
@@ -109,6 +137,7 @@ pub async fn scan(
             dry_run: false,
             enable_clip: req_for_task.enable_clip,
             enable_face: req_for_task.enable_face,
+            materialize_picks: !req_for_task.in_place,
             execution_provider: ExecutionProvider::Cpu,
         };
         let pipeline = Pipeline::new(cfg);
@@ -130,7 +159,97 @@ pub async fn scan(
         }
     });
 
-    Json(serde_json::json!({ "run_id": run_id }))
+    Ok(Json(serde_json::json!({ "run_id": run_id })))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BrowseQuery {
+    /// Directory to list. If absent, defaults to `$HOME` (or `/` if no home).
+    pub path: Option<PathBuf>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct BrowseResponse {
+    pub current: PathBuf,
+    pub parent: Option<PathBuf>,
+    pub dirs: Vec<BrowseEntry>,
+    pub files: Vec<BrowseFile>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct BrowseEntry {
+    pub name: String,
+    pub path: PathBuf,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct BrowseFile {
+    pub name: String,
+    pub path: PathBuf,
+    pub size: u64,
+    pub format: String,
+}
+
+/// List photo-relevant entries in a server-side directory.
+pub async fn browse(
+    axum::extract::Query(q): axum::extract::Query<BrowseQuery>,
+) -> Result<Json<BrowseResponse>, (StatusCode, String)> {
+    // Default landing: /mnt on WSL (so users see /mnt/c, /mnt/d at a glance);
+    // home dir elsewhere.
+    let target = q.path.unwrap_or_else(|| {
+        let mnt = PathBuf::from("/mnt");
+        if cfg!(target_os = "linux") && mnt.is_dir() {
+            // Heuristic: under WSL, /mnt is the Windows-drive root.
+            mnt
+        } else {
+            dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"))
+        }
+    });
+
+    let canonical = match std::fs::canonicalize(&target) {
+        Ok(p) => p,
+        Err(e) => return Err((StatusCode::BAD_REQUEST, format!("{}: {e}", target.display()))),
+    };
+
+    let read = match std::fs::read_dir(&canonical) {
+        Ok(r) => r,
+        Err(e) => return Err((StatusCode::FORBIDDEN, format!("{}: {e}", canonical.display()))),
+    };
+
+    let mut dirs: Vec<BrowseEntry> = Vec::new();
+    let mut files: Vec<BrowseFile> = Vec::new();
+    for entry in read.flatten() {
+        let path = entry.path();
+        let Some(name_os) = path.file_name() else { continue };
+        let name = name_os.to_string_lossy().to_string();
+        if name.starts_with('.') {
+            continue;
+        }
+        let Ok(meta) = entry.metadata() else { continue };
+        if meta.is_dir() {
+            dirs.push(BrowseEntry { name, path });
+        } else if meta.is_file() {
+            if let Some(format) = classify_extension(&path) {
+                files.push(BrowseFile {
+                    name,
+                    path,
+                    size: meta.len(),
+                    format: format!("{:?}", format),
+                });
+            }
+        }
+    }
+
+    dirs.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    files.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+
+    let parent = canonical.parent().map(|p| p.to_path_buf());
+    Ok(Json(BrowseResponse {
+        current: canonical,
+        parent,
+        dirs,
+        files,
+    }))
 }
 
 pub async fn get_run(
@@ -193,6 +312,32 @@ pub async fn get_thumb(
     State(state): State<AppState>,
     Path((run_id, photo_id)): Path<(String, String)>,
 ) -> impl IntoResponse {
+    serve_jpeg(state, run_id, photo_id, 256, 75).await
+}
+
+/// Stream a larger preview JPEG (default 1920px long edge, quality 88) for
+/// the lightbox "view original" feature. Optional `?size=N` query param.
+pub async fn get_preview(
+    State(state): State<AppState>,
+    Path((run_id, photo_id)): Path<(String, String)>,
+    axum::extract::Query(q): axum::extract::Query<PreviewQuery>,
+) -> impl IntoResponse {
+    let size = q.size.unwrap_or(1920).clamp(512, 4096);
+    serve_jpeg(state, run_id, photo_id, size, 88).await
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PreviewQuery {
+    pub size: Option<u32>,
+}
+
+async fn serve_jpeg(
+    state: AppState,
+    run_id: String,
+    photo_id: String,
+    long_edge: u32,
+    quality: u8,
+) -> axum::response::Response {
     let parsed = match Uuid::parse_str(&photo_id) {
         Ok(u) => u,
         Err(_) => return (StatusCode::BAD_REQUEST, "bad photo id").into_response(),
@@ -211,9 +356,9 @@ pub async fn get_thumb(
     };
 
     let result = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, String> {
-        let img = decode_thumbnail_for(&photo_ref, ThumbnailSpec { long_edge: 256 })
+        let img = decode_thumbnail_for(&photo_ref, ThumbnailSpec { long_edge })
             .map_err(|e| e.to_string())?;
-        encode_jpeg(&img, 75).map_err(|e| e.to_string())
+        encode_jpeg(&img, quality).map_err(|e| e.to_string())
     })
     .await;
 
@@ -241,9 +386,29 @@ pub async fn list_runs(State(state): State<AppState>) -> Json<serde_json::Value>
 pub struct ExplainRequest {
     /// Index into the run's composition_picks vector.
     pub composition_index: usize,
-    /// "openai" or "anthropic" (default: "openai").
+    /// "openai" or "anthropic" (default: "openai"). Used when `vlm` is None.
     #[serde(default = "default_provider")]
     pub provider: String,
+    /// Optional per-request VLM override. When present, instantiates a provider
+    /// with these values directly instead of reading server environment vars.
+    /// Lets the UI store its own keys / point at any OpenAI-compatible service.
+    #[serde(default)]
+    pub vlm: Option<VlmConfig>,
+    /// UI language code ("en"/"zh") — the prompt asks the model to respond
+    /// in this language. Defaults to English.
+    #[serde(default = "default_lang")]
+    pub language: String,
+}
+
+fn default_lang() -> String { "en".into() }
+
+#[derive(Debug, Deserialize)]
+pub struct VlmConfig {
+    /// "openai" (OpenAI-compatible chat completions) or "anthropic" (Messages API).
+    pub provider: String,
+    pub base_url: String,
+    pub api_key: String,
+    pub model: String,
 }
 
 fn default_provider() -> String { "openai".into() }
@@ -257,13 +422,20 @@ pub async fn explain(
     Json(req): Json<ExplainRequest>,
 ) -> impl IntoResponse {
     // Snapshot what we need without holding the lock across the blocking call.
+    // The cache key incorporates the resolved provider name + optional model,
+    // so flipping providers (openai → anthropic) or models doesn't return the
+    // stale prior answer.
+    let cache_provider_key = match &req.vlm {
+        Some(v) => format!("{}:{}", v.provider, v.model),
+        None => req.provider.clone(),
+    };
     let snapshot = {
         let guard = state.runs.lock().await;
         let Some(rec) = guard.get(&id) else {
             return (StatusCode::NOT_FOUND, "run not found").into_response();
         };
         if let Some(cached) = rec.explanations.get(&req.composition_index) {
-            if cached.provider == req.provider {
+            if cached.provider == cache_provider_key {
                 return Json(serde_json::to_value(cached).unwrap()).into_response();
             }
         }
@@ -298,14 +470,28 @@ pub async fn explain(
 
     let (scene, kept_count, total, entries) = snapshot;
     let provider_name = req.provider.clone();
+    let vlm_override = req.vlm;
+    let cache_key_for_task = cache_provider_key.clone();
+    let language = req.language.clone();
     let index = req.composition_index;
     let runs = state.runs.clone();
 
     let result = tokio::task::spawn_blocking(move || -> Result<ExplanationRecord, String> {
-        let provider: Box<dyn VlmProvider> = match provider_name.as_str() {
-            "openai" => Box::new(OpenAiProvider::from_env().map_err(|e| e.to_string())?),
-            "anthropic" => Box::new(AnthropicProvider::from_env().map_err(|e| e.to_string())?),
-            other => return Err(format!("unknown provider: {other}")),
+        let provider: Box<dyn VlmProvider> = match &vlm_override {
+            Some(v) => match v.provider.as_str() {
+                "openai" => Box::new(
+                    OpenAiProvider::from_parts(v.api_key.clone(), v.model.clone(), v.base_url.clone())
+                ),
+                "anthropic" => Box::new(
+                    AnthropicProvider::from_parts(v.api_key.clone(), v.model.clone(), v.base_url.clone())
+                ),
+                other => return Err(format!("unknown provider: {other}")),
+            },
+            None => match provider_name.as_str() {
+                "openai" => Box::new(OpenAiProvider::from_env().map_err(|e| e.to_string())?),
+                "anthropic" => Box::new(AnthropicProvider::from_env().map_err(|e| e.to_string())?),
+                other => return Err(format!("unknown provider: {other}")),
+            },
         };
 
         let images: Vec<VlmImage> = entries
@@ -329,11 +515,12 @@ pub async fn explain(
             })
             .collect();
 
-        let prompt = explain_group_prompt(&scene, kept_count, total);
+        let prompt = explain_group_prompt(&scene, kept_count, total, &language);
         let req = VlmRequest::new(prompt, images);
         let text = provider.complete(&req).map_err(|e| e.to_string())?;
         Ok(ExplanationRecord {
-            provider: provider.name().to_string(),
+            // Provider field doubles as cache key; embed model so swaps invalidate.
+            provider: cache_key_for_task,
             model: provider.model().to_string(),
             text,
         })
@@ -350,6 +537,101 @@ pub async fn explain(
         }
         Ok(Err(msg)) => (StatusCode::BAD_GATEWAY, msg).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("task: {e}")).into_response(),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ApplyRequest {
+    /// Photos the user wants to delete (typically the algorithm's "rejected"
+    /// set minus any manually-overridden keeps). Each entry is a PhotoId UUID.
+    pub delete_ids: Vec<String>,
+    /// When true, items go to the OS trash (recoverable). When false, they
+    /// are permanently deleted via `fs::remove_file`.
+    #[serde(default = "default_use_trash")]
+    pub use_trash: bool,
+}
+
+fn default_use_trash() -> bool { true }
+
+#[derive(Debug, serde::Serialize)]
+pub struct ApplyResult {
+    pub requested: usize,
+    pub deleted: usize,
+    pub failed: Vec<ApplyFailure>,
+    pub used_trash: bool,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct ApplyFailure {
+    pub photo_id: String,
+    pub path: PathBuf,
+    pub error: String,
+}
+
+/// Destructively apply the user's selections: for each photo id in
+/// `delete_ids`, send the source file to the OS trash (or delete outright).
+pub async fn apply(
+    State(state): State<AppState>,
+    Path(run_id): Path<String>,
+    Json(req): Json<ApplyRequest>,
+) -> impl IntoResponse {
+    // Resolve photo ids to paths under the lock, then release before doing I/O.
+    let resolved: Vec<(String, PathBuf)> = {
+        let guard = state.runs.lock().await;
+        let Some(rec) = guard.get(&run_id) else {
+            return (StatusCode::NOT_FOUND, "run not found").into_response();
+        };
+        let mut out = Vec::with_capacity(req.delete_ids.len());
+        for id_str in &req.delete_ids {
+            let Ok(uuid) = Uuid::parse_str(id_str) else {
+                return (StatusCode::BAD_REQUEST, format!("bad photo id: {id_str}")).into_response();
+            };
+            let pid = photo_pick_core::ingest::PhotoId(uuid);
+            match rec.photos.get(&pid) {
+                Some(p) => out.push((id_str.clone(), p.path.clone())),
+                None => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        format!("photo {id_str} not in run"),
+                    )
+                        .into_response()
+                }
+            }
+        }
+        out
+    };
+
+    let use_trash = req.use_trash;
+    let result = tokio::task::spawn_blocking(move || -> ApplyResult {
+        let mut deleted = 0;
+        let mut failed: Vec<ApplyFailure> = Vec::new();
+        for (id, path) in &resolved {
+            let outcome = if use_trash {
+                trash::delete(path).map_err(|e| e.to_string())
+            } else {
+                std::fs::remove_file(path).map_err(|e| e.to_string())
+            };
+            match outcome {
+                Ok(()) => deleted += 1,
+                Err(e) => failed.push(ApplyFailure {
+                    photo_id: id.clone(),
+                    path: path.clone(),
+                    error: e,
+                }),
+            }
+        }
+        ApplyResult {
+            requested: resolved.len(),
+            deleted,
+            failed,
+            used_trash: use_trash,
+        }
+    })
+    .await;
+
+    match result {
+        Ok(r) => Json(serde_json::to_value(r).unwrap()).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("apply task: {e}")).into_response(),
     }
 }
 

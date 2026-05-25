@@ -2,7 +2,10 @@ use crate::cache::CacheStore;
 use crate::error::Result;
 use crate::features::{FeatureExtractor, FullExtractor, PhotoFeatures};
 use crate::group::{cluster_stage_a, cluster_stage_b, CompositionGroup, Group, StageAParams, StageBParams};
-use crate::ingest::{decode_thumbnail_for, FsScanner, PhotoId, PhotoRef, Scanner, ThumbnailSpec};
+use crate::ingest::{
+    decode_thumbnail_for, scan_files, FsScanner, PhotoId, PhotoRef, PhotoSource, Scanner,
+    ThumbnailSpec,
+};
 use crate::models::{ClipEncoder, ExecutionProvider};
 use crate::scoring::YunetFaceDetector;
 use crate::output::{materialize, plan_output, write_html_report, write_json_report};
@@ -50,7 +53,7 @@ impl ProgressSink for NoopProgress {
 
 #[derive(Debug, Clone)]
 pub struct PipelineConfig {
-    pub root: PathBuf,
+    pub source: PhotoSource,
     pub output: PathBuf,
     pub report_path: Option<PathBuf>,
     pub html_report_path: Option<PathBuf>,
@@ -66,6 +69,10 @@ pub struct PipelineConfig {
     pub dry_run: bool,
     pub enable_clip: bool,
     pub enable_face: bool,
+    /// When false, skip copying/linking picks+rejected into `output`. The
+    /// directory is still used for cache + reports. Use this for the "review
+    /// in UI, apply destructively to source" workflow.
+    pub materialize_picks: bool,
     pub execution_provider: ExecutionProvider,
 }
 
@@ -104,8 +111,13 @@ impl Pipeline {
 
         // 1. Scan
         progress.on_stage(Stage::Scan, 0);
-        let scanner = FsScanner::default();
-        let photos = scanner.scan(&self.cfg.root)?;
+        let photos = match &self.cfg.source {
+            PhotoSource::Directory(root) => {
+                let scanner = FsScanner::default();
+                scanner.scan(root)?
+            }
+            PhotoSource::Files(files) => scan_files(files)?,
+        };
         progress.on_finish(Stage::Scan);
         tracing::info!(count = photos.len(), "scan complete");
 
@@ -128,11 +140,23 @@ impl Pipeline {
 
         let mut features: HashMap<PhotoId, PhotoFeatures> = HashMap::new();
         let mut to_extract: Vec<&PhotoRef> = Vec::with_capacity(photos.len());
+        let want_clip = self.cfg.enable_clip;
+        let want_face = self.cfg.enable_face;
         if let Some(c) = &cache {
             for p in &photos {
                 match c.get(&p.sha256_short, p.id) {
                     Ok(Some(feat)) => {
-                        features.insert(p.id, feat);
+                        // Treat as a miss if the user asked for a feature the
+                        // cached row doesn't have — otherwise toggling CLIP /
+                        // face on after a no-model run would silently leave
+                        // the pipeline without the data it needs.
+                        let missing_clip = want_clip && feat.clip_embed.is_none();
+                        let missing_face = want_face && feat.face.is_none();
+                        if missing_clip || missing_face {
+                            to_extract.push(p);
+                        } else {
+                            features.insert(p.id, feat);
+                        }
                     }
                     Ok(None) => to_extract.push(p),
                     Err(err) => {
@@ -285,7 +309,7 @@ impl Pipeline {
         let plan = plan_output(&photos_by_id, &stage_a_picks, &composition_picks);
         let final_picked_ids: HashSet<PhotoId> = plan.picked.iter().map(|(p, _)| *p).collect();
 
-        let (picked_count, rejected_count) = if self.cfg.dry_run {
+        let (picked_count, rejected_count) = if self.cfg.dry_run || !self.cfg.materialize_picks {
             (plan.picked.len(), plan.rejected.len())
         } else {
             progress.on_stage(Stage::Write, (plan.picked.len() + plan.rejected.len()) as u64);
@@ -294,10 +318,11 @@ impl Pipeline {
             counts
         };
 
+        let root_hint = self.cfg.source.root_hint();
         if let Some(report_path) = &self.cfg.report_path {
             write_json_report(
                 report_path,
-                &self.cfg.root,
+                &root_hint,
                 start.elapsed(),
                 &photos_by_id,
                 &stage_a_picks,
@@ -309,7 +334,7 @@ impl Pipeline {
         if let Some(html_path) = &self.cfg.html_report_path {
             write_html_report(
                 html_path,
-                &self.cfg.root,
+                &root_hint,
                 start.elapsed(),
                 &photos_by_id,
                 &stage_a_picks,

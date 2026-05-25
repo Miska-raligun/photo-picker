@@ -20,6 +20,9 @@ pub struct RunRecord {
     pub id: String,
     pub root: PathBuf,
     pub output: PathBuf,
+    /// In-place mode: no `picked/`/`rejected/` materialized; user will apply
+    /// selections destructively to the source via `/api/runs/:id/apply`.
+    pub in_place: bool,
     pub status: RunStatus,
     pub report: Option<PipelineReport>,
     /// Path to the on-disk HTML report (when the run completed and one was
