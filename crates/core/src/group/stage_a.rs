@@ -56,38 +56,43 @@ pub fn cluster_stage_a(
         let delta_t = compute_delta_t(&timed, params);
         let mut uf = UnionFind::new(timed.len());
 
-        for i in 0..timed.len().saturating_sub(1) {
+        // Compare each photo against every later photo still inside the time
+        // window — not just its immediate neighbor. Photos are time-sorted, so
+        // once a pair exceeds the window no later pair can be closer and we stop
+        // scanning forward. This keeps a burst intact even when one middle frame
+        // is momentarily dissimilar (a hand over the lens, a focus hunt), which
+        // adjacent-only chaining would split.
+        for i in 0..timed.len() {
             let a = timed[i];
-            let b = timed[i + 1];
+            for (j, &b) in timed.iter().enumerate().skip(i + 1) {
+                // BurstID match forces grouping regardless of time/hash.
+                if let (Some(ba), Some(bb)) = (&a.burst_id, &b.burst_id) {
+                    if ba == bb {
+                        uf.union(i, j);
+                        continue;
+                    }
+                }
 
-            // BurstID match forces grouping regardless of time/hash.
-            if let (Some(ba), Some(bb)) = (&a.burst_id, &b.burst_id) {
-                if ba == bb {
-                    uf.union(i, i + 1);
+                if seconds_between(a, b) > delta_t {
+                    break;
+                }
+
+                let (Some(fa), Some(fb)) = (features.get(&a.id), features.get(&b.id)) else {
                     continue;
+                };
+                // Prefer CLIP cosine similarity — pHash gives too many false
+                // positives (high-contrast scenes hash similarly even when their
+                // content is unrelated, and pHash similarity isn't transitive so
+                // chained merges can drag in visually different photos).
+                let should_merge = match (&fa.clip_embed, &fb.clip_embed) {
+                    (Some(ea), Some(eb)) if ea.len() == eb.len() => {
+                        cosine_normalized(ea, eb) > params.clip_threshold
+                    }
+                    _ => hamming(fa.phash, fb.phash) <= params.max_hash_dist,
+                };
+                if should_merge {
+                    uf.union(i, j);
                 }
-            }
-
-            let dt = seconds_between(a, b);
-            if dt > delta_t {
-                continue;
-            }
-
-            let (Some(fa), Some(fb)) = (features.get(&a.id), features.get(&b.id)) else {
-                continue;
-            };
-            // Prefer CLIP cosine similarity — pHash gives too many false
-            // positives (high-contrast scenes hash similarly even when their
-            // content is unrelated, and pHash similarity isn't transitive so
-            // chained adjacent merges can drag in visually different photos).
-            let should_merge = match (&fa.clip_embed, &fb.clip_embed) {
-                (Some(ea), Some(eb)) if ea.len() == eb.len() => {
-                    cosine_normalized(ea, eb) > params.clip_threshold
-                }
-                _ => hamming(fa.phash, fb.phash) <= params.max_hash_dist,
-            };
-            if should_merge {
-                uf.union(i, i + 1);
             }
         }
 
@@ -194,6 +199,30 @@ mod tests {
 
         let groups = cluster_stage_a(&photos, &features, &StageAParams::default());
         assert_eq!(groups.len(), 2);
+    }
+
+    #[test]
+    fn windowed_merge_links_nonadjacent_frames() {
+        // Frame 1 (middle) is dissimilar, but frames 0 and 2 share a hash and
+        // sit inside the time window — windowed comparison keeps them together
+        // where adjacent-only chaining would split into three groups.
+        let ids: Vec<PhotoId> = (0..3).map(|_| PhotoId::new()).collect();
+        let photos = vec![
+            mk_photo(ids[0], 0),
+            mk_photo(ids[1], 100),
+            mk_photo(ids[2], 200),
+        ];
+        let features: HashMap<_, _> = [
+            (ids[0], mk_feat(ids[0], 0xFF)),
+            (ids[1], mk_feat(ids[1], 0x00)), // hamming 8 vs 0xFF → won't merge with neighbors
+            (ids[2], mk_feat(ids[2], 0xFF)),
+        ]
+        .into();
+
+        let groups = cluster_stage_a(&photos, &features, &StageAParams::default());
+        assert_eq!(groups.len(), 2, "0 and 2 merge across the dissimilar middle frame");
+        let sizes: Vec<usize> = groups.iter().map(|g| g.photo_ids.len()).collect();
+        assert!(sizes.contains(&2) && sizes.contains(&1));
     }
 
     #[test]
