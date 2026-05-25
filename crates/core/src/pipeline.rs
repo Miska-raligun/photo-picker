@@ -6,7 +6,10 @@ use crate::ingest::{
     decode_thumbnail_for, scan_files, FsScanner, PhotoId, PhotoRef, PhotoSource, Scanner,
     ThumbnailSpec,
 };
-use crate::models::{ClipEncoder, ExecutionProvider};
+use crate::models::ExecutionProvider;
+#[cfg(feature = "onnx")]
+use crate::models::ClipEncoder;
+#[cfg(feature = "onnx")]
 use crate::scoring::YunetFaceDetector;
 use crate::output::{materialize, plan_output, write_html_report, write_json_report};
 use crate::scoring::{
@@ -179,34 +182,45 @@ impl Pipeline {
                 && features.values().any(|f| f.clip_embed.is_some());
             vec![]
         } else {
-            let clip = if self.cfg.enable_clip {
-                match ClipEncoder::load(self.cfg.execution_provider) {
-                    Ok(e) => {
-                        tracing::info!("CLIP encoder loaded");
-                        Some(e)
-                    }
-                    Err(err) => {
-                        tracing::warn!(%err, "CLIP load failed; continuing without Stage B");
-                        None
-                    }
-                }
-            } else {
-                None
-            };
-            clip_enabled = clip.is_some();
+            #[allow(unused_mut)]
+            let mut extractor = FullExtractor::new();
 
-            let mut extractor = FullExtractor::new(clip);
-            if self.cfg.enable_face {
-                match YunetFaceDetector::load(self.cfg.execution_provider) {
-                    Ok(d) => {
-                        tracing::info!("YuNet face detector loaded");
-                        extractor = extractor.with_face_detector(Box::new(d));
+            #[cfg(feature = "onnx")]
+            {
+                let clip = if self.cfg.enable_clip {
+                    match ClipEncoder::load(self.cfg.execution_provider) {
+                        Ok(e) => {
+                            tracing::info!("CLIP encoder loaded");
+                            Some(e)
+                        }
+                        Err(err) => {
+                            tracing::warn!(%err, "CLIP load failed; continuing without Stage B");
+                            None
+                        }
                     }
-                    Err(err) => {
-                        tracing::warn!(%err, "YuNet load failed; continuing without face detection");
+                } else {
+                    None
+                };
+                clip_enabled = clip.is_some();
+                extractor = extractor.with_clip(clip);
+
+                if self.cfg.enable_face {
+                    match YunetFaceDetector::load(self.cfg.execution_provider) {
+                        Ok(d) => {
+                            tracing::info!("YuNet face detector loaded");
+                            extractor = extractor.with_face_detector(Box::new(d));
+                        }
+                        Err(err) => {
+                            tracing::warn!(%err, "YuNet load failed; continuing without face detection");
+                        }
                     }
                 }
             }
+            #[cfg(not(feature = "onnx"))]
+            {
+                clip_enabled = false;
+            }
+
             progress.on_stage(Stage::Features, extract_count as u64);
             let counter = Mutex::new(0u64);
 
@@ -237,12 +251,14 @@ impl Pipeline {
             pairs
         };
 
-        // 2c. Persist newly extracted features back into the cache.
+        // 2c. Persist newly extracted features back into the cache (one txn).
         if let Some(c) = &cache {
-            for (_, sha, feat) in &extracted_pairs {
-                if let Err(err) = c.put(sha, feat) {
-                    tracing::warn!(%err, "cache write failed");
-                }
+            let items: Vec<(&[u8; 16], &PhotoFeatures)> = extracted_pairs
+                .iter()
+                .map(|(_, sha, feat)| (sha, feat))
+                .collect();
+            if let Err(err) = c.put_many(&items) {
+                tracing::warn!(%err, "cache write failed");
             }
         }
         for (id, _, feat) in extracted_pairs {

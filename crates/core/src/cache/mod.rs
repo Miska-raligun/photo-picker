@@ -182,6 +182,23 @@ impl CacheStore {
         Ok(())
     }
 
+    /// Write many feature rows inside a single transaction. On a cold cache the
+    /// pipeline inserts one row per photo; wrapping them in one transaction
+    /// turns N fsync-bound commits into one, which dominates first-run time on
+    /// large libraries.
+    pub fn put_many(&self, items: &[(&[u8; 16], &PhotoFeatures)]) -> Result<()> {
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|e| Error::Config(format!("cache tx begin: {e}")))?;
+        for &(sha, feat) in items {
+            self.put(sha, feat)?;
+        }
+        tx.commit()
+            .map_err(|e| Error::Config(format!("cache tx commit: {e}")))?;
+        Ok(())
+    }
+
     pub fn row_count(&self) -> Result<i64> {
         self.conn
             .query_row("SELECT COUNT(*) FROM features", [], |r| r.get(0))
@@ -235,6 +252,22 @@ mod tests {
         assert_eq!(got.exposure, feat.exposure);
         assert_eq!(got.clip_embed.as_ref().unwrap().len(), 3);
         assert!((got.clip_embed.as_ref().unwrap()[1] - 0.2).abs() < 1e-6);
+    }
+
+    #[test]
+    fn put_many_writes_all_rows() {
+        let dir = tempdir().unwrap();
+        let cache = CacheStore::open(&dir.path().join("c.db")).unwrap();
+        let k1 = [0x01; 16];
+        let k2 = [0x02; 16];
+        let f1 = PhotoFeatures::hashes_only(PhotoId::new(), 0xAA, 0xBB);
+        let f2 = PhotoFeatures::hashes_only(PhotoId::new(), 0xCC, 0xDD);
+
+        cache.put_many(&[(&k1, &f1), (&k2, &f2)]).unwrap();
+
+        assert_eq!(cache.row_count().unwrap(), 2);
+        assert_eq!(cache.get(&k1, PhotoId::new()).unwrap().unwrap().phash, 0xAA);
+        assert_eq!(cache.get(&k2, PhotoId::new()).unwrap().unwrap().phash, 0xCC);
     }
 
     #[test]

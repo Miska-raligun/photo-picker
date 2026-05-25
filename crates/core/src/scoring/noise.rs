@@ -1,4 +1,4 @@
-use image::{DynamicImage, GrayImage};
+use image::GrayImage;
 
 /// Plan B.4: estimate noise from the flattest 5 % of 8×8 patches, then compare
 /// against ISO-derived expectation.
@@ -6,9 +6,8 @@ use image::{DynamicImage, GrayImage};
 /// `expected_σ = 1.0 · √(ISO/100)` (luma units, calibrated empirically — a
 /// modern FF sensor at ISO 100 should sit near σ≈1, ISO 6400 near σ≈8).
 /// `noise = clamp(expected / max(actual, ε), 0, 1)`.
-pub fn score(img: &DynamicImage, iso: Option<u32>) -> f32 {
-    let gray = img.to_luma8();
-    let actual = estimate_noise_sigma(&gray);
+pub fn score(gray: &GrayImage, iso: Option<u32>) -> f32 {
+    let actual = estimate_noise_sigma(gray);
     let iso = iso.unwrap_or(100).max(50) as f32;
     let expected = (iso / 100.0).sqrt().max(0.5);
     let actual = actual.max(0.5);
@@ -23,13 +22,14 @@ fn estimate_noise_sigma(gray: &GrayImage) -> f32 {
         return 1.0;
     }
 
+    let raw = gray.as_raw();
+    let row = w as usize;
     let mut variances: Vec<f32> = Vec::with_capacity(((w / patch) * (h / patch)) as usize);
     let mut y = 0;
     while y + patch <= h {
         let mut x = 0;
         while x + patch <= w {
-            let p = image::imageops::crop_imm(gray, x, y, patch, patch).to_image();
-            variances.push(patch_variance(&p));
+            variances.push(patch_variance(raw, row, x as usize, y as usize, patch as usize));
             x += patch;
         }
         y += patch;
@@ -44,22 +44,29 @@ fn estimate_noise_sigma(gray: &GrayImage) -> f32 {
     mean_var.sqrt()
 }
 
-fn patch_variance(patch: &GrayImage) -> f32 {
-    let pixels: Vec<f32> = patch.pixels().map(|p| p.0[0] as f32).collect();
-    if pixels.is_empty() {
-        return 0.0;
+/// Population variance of a `patch×patch` block at `(x0, y0)`, read directly
+/// from the luma buffer (no per-patch crop/allocation).
+fn patch_variance(raw: &[u8], row: usize, x0: usize, y0: usize, patch: usize) -> f32 {
+    let n = (patch * patch) as f32;
+    let mut sum = 0.0_f32;
+    let mut sum_sq = 0.0_f32;
+    for dy in 0..patch {
+        let base = (y0 + dy) * row + x0;
+        for dx in 0..patch {
+            let v = raw[base + dx] as f32;
+            sum += v;
+            sum_sq += v * v;
+        }
     }
-    let n = pixels.len() as f32;
-    let mean = pixels.iter().sum::<f32>() / n;
-    pixels.iter().map(|p| (p - mean).powi(2)).sum::<f32>() / n
+    (sum_sq / n - (sum / n).powi(2)).max(0.0)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use image::{DynamicImage, GrayImage, Luma};
+    use image::{GrayImage, Luma};
 
-    fn noisy(size: u32, sigma: u8, seed: u64) -> DynamicImage {
+    fn noisy(size: u32, sigma: u8, seed: u64) -> GrayImage {
         // Deterministic LCG-style pseudo-noise around 128.
         let mut img = GrayImage::new(size, size);
         let mut s = seed;
@@ -69,15 +76,15 @@ mod tests {
             let v = (128 + delta).clamp(0, 255) as u8;
             *p = Luma([v]);
         }
-        DynamicImage::ImageLuma8(img)
+        img
     }
 
-    fn solid(size: u32, v: u8) -> DynamicImage {
+    fn solid(size: u32, v: u8) -> GrayImage {
         let mut img = GrayImage::new(size, size);
         for p in img.pixels_mut() {
             *p = Luma([v]);
         }
-        DynamicImage::ImageLuma8(img)
+        img
     }
 
     #[test]

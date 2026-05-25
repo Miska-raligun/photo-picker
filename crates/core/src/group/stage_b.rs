@@ -1,4 +1,4 @@
-use super::{unionfind::UnionFind, GroupId};
+use super::{cosine_normalized, unionfind::UnionFind, GroupId};
 use crate::ingest::PhotoId;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -55,11 +55,6 @@ pub fn cluster_stage_b(
         .into_values()
         .map(|ids| CompositionGroup { id: GroupId::new(), photo_ids: ids })
         .collect()
-}
-
-/// Cosine similarity for already L2-normalized vectors (dot product).
-fn cosine_normalized(a: &[f32], b: &[f32]) -> f32 {
-    a.iter().zip(b).map(|(x, y)| x * y).sum()
 }
 
 #[cfg(test)]

@@ -1,4 +1,4 @@
-use image::{DynamicImage, GrayImage};
+use image::GrayImage;
 
 /// Plan B.3: raw multi-ROI sharpness signal.
 /// `sharpness_raw = max over ROIs of (0.6·laplacian_var + 0.4·tenengrad)`.
@@ -7,8 +7,7 @@ use image::{DynamicImage, GrayImage};
 /// across photos *within a group* via z-score → sigmoid in [`finalize_group`].
 ///
 /// [`finalize_group`]: super::finalize_group
-pub fn raw(img: &DynamicImage) -> f32 {
-    let gray = img.to_luma8();
+pub fn raw(gray: &GrayImage) -> f32 {
     let (w, h) = (gray.width(), gray.height());
     let roi_size = (w.min(h) / 3).max(64);
 
@@ -33,7 +32,7 @@ pub fn raw(img: &DynamicImage) -> f32 {
         let y = cy
             .saturating_sub(half)
             .min(h.saturating_sub(roi_size).max(0));
-        let roi = image::imageops::crop_imm(&gray, x, y, roi_size, roi_size).to_image();
+        let roi = image::imageops::crop_imm(gray, x, y, roi_size, roi_size).to_image();
         let lv = laplacian_variance(&roi);
         let tg = tenengrad(&roi);
         let s = 0.6 * lv + 0.4 * tg;
@@ -96,23 +95,23 @@ fn tenengrad(roi: &GrayImage) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use image::{DynamicImage, GrayImage, Luma};
+    use image::{GrayImage, Luma};
 
-    fn checkerboard(size: u32, cell: u32) -> DynamicImage {
+    fn checkerboard(size: u32, cell: u32) -> GrayImage {
         let mut img = GrayImage::new(size, size);
         for (x, y, p) in img.enumerate_pixels_mut() {
             let v = if ((x / cell) + (y / cell)) % 2 == 0 { 0 } else { 255 };
             *p = Luma([v]);
         }
-        DynamicImage::ImageLuma8(img)
+        img
     }
 
-    fn solid_gray(size: u32, v: u8) -> DynamicImage {
+    fn solid_gray(size: u32, v: u8) -> GrayImage {
         let mut img = GrayImage::new(size, size);
         for p in img.pixels_mut() {
             *p = Luma([v]);
         }
-        DynamicImage::ImageLuma8(img)
+        img
     }
 
     #[test]

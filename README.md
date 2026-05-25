@@ -91,6 +91,16 @@ cargo build --release --bin photo-pick-server
 The first scan downloads the CLIP and YuNet ONNX models to
 `~/.cache/photo-pick/models/` (~85MB + ~230KB, SHA-256 pinned).
 
+### Testing without ONNX
+
+The ONNX stack (CLIP + YuNet) sits behind the default `onnx` cargo feature.
+To build or test the pure-Rust pipeline (ingest, scoring, grouping, cache)
+without fetching/linking the onnxruntime static library:
+
+```bash
+cargo test -p photo-pick-core --no-default-features
+```
+
 ## Run
 
 ```bash

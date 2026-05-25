@@ -12,9 +12,11 @@
 //! warning log.
 
 pub mod cache;
+#[cfg(feature = "onnx")]
 pub mod clip;
 pub mod registry;
 
 pub use cache::{ensure_model, ModelDescriptor};
+#[cfg(feature = "onnx")]
 pub use clip::{ClipEncoder, CLIP_EMBED_DIM};
 pub use registry::ExecutionProvider;
