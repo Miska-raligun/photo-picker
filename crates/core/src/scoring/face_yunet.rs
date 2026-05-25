@@ -102,10 +102,34 @@ impl YunetFaceDetector {
         });
         let kept = nms(&candidates, NMS_IOU_THRESHOLD);
 
-        let faces = kept
-            .into_iter()
-            .map(|f| project_to_source(&f, &meta))
+        let mut faces: Vec<FaceBox> = kept
+            .iter()
+            .map(|f| project_to_source(f, &meta))
             .collect();
+
+        // Fill local_sharpness per face by cropping the bbox out of the
+        // thumbnail's luma plane and running the shared Laplacian-variance
+        // helper. score_group_final later normalizes these within the group
+        // so absolute scale doesn't matter — we just need a comparable
+        // signal per face.
+        if !faces.is_empty() {
+            let gray = thumb.to_luma8();
+            let (tw, th) = (gray.width(), gray.height());
+            for f in faces.iter_mut() {
+                let x = (f.x * tw as f32) as u32;
+                let y = (f.y * th as f32) as u32;
+                let w = (f.w * tw as f32) as u32;
+                let h = (f.h * th as f32) as u32;
+                let x = x.min(tw.saturating_sub(1));
+                let y = y.min(th.saturating_sub(1));
+                let w = w.min(tw - x);
+                let h = h.min(th - y);
+                if w >= 8 && h >= 8 {
+                    let roi = image::imageops::crop_imm(&gray, x, y, w, h).to_image();
+                    f.local_sharpness = Some(crate::scoring::sharpness::laplacian_variance(&roi));
+                }
+            }
+        }
         Ok(FaceInfo { faces })
     }
 }

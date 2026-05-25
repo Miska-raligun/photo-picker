@@ -108,11 +108,18 @@ pub async fn scan(
     state.runs.lock().await.insert(run_id.clone(), record);
 
     let runs = state.runs.clone();
+    let semaphore = state.scan_semaphore.clone();
     let run_id_for_task = run_id.clone();
     let req_for_task = req;
     let source_for_task = source;
 
-    tokio::task::spawn_blocking(move || {
+    tokio::spawn(async move {
+        // Wait for a scan-pipeline permit so N concurrent /api/scan POSTs
+        // don't oversubscribe the blocking pool and starve thumbnail
+        // requests. UI shows the run as `running` for the entire wait.
+        let _permit = semaphore.acquire_owned().await.expect("semaphore closed");
+        let runs_inner = runs.clone();
+        let _ = tokio::task::spawn_blocking(move || {
         let cfg = PipelineConfig {
             source: source_for_task,
             output: req_for_task.output.clone(),
@@ -142,7 +149,7 @@ pub async fn scan(
         };
         let pipeline = Pipeline::new(cfg);
         let result = pipeline.run(&NoopProgress);
-        let mut guard = runs.blocking_lock();
+        let mut guard = runs_inner.blocking_lock();
         if let Some(rec) = guard.get_mut(&run_id_for_task) {
             match result {
                 Ok(output) => {
@@ -157,6 +164,8 @@ pub async fn scan(
                 }
             }
         }
+        }).await;
+        drop(_permit);
     });
 
     Ok(Json(serde_json::json!({ "run_id": run_id })))
@@ -344,6 +353,13 @@ async fn serve_jpeg(
     };
     let pid = photo_pick_core::ingest::PhotoId(parsed);
 
+    // LRU lookup — for RAW this avoids 100s of ms of byte-scan + decode on
+    // every grid render.
+    let key = crate::state::ThumbKey { photo_id: pid, long_edge, quality };
+    if let Some(bytes) = state.thumb_cache.get(&key) {
+        return jpeg_response(bytes);
+    }
+
     let photo_ref = {
         let guard = state.runs.lock().await;
         let Some(rec) = guard.get(&run_id) else {
@@ -363,17 +379,24 @@ async fn serve_jpeg(
     .await;
 
     match result {
-        Ok(Ok(bytes)) => (
-            [
-                ("content-type", "image/jpeg".to_string()),
-                ("cache-control", "max-age=3600".to_string()),
-            ],
-            bytes,
-        )
-            .into_response(),
+        Ok(Ok(bytes)) => {
+            state.thumb_cache.put(key, bytes.clone());
+            jpeg_response(bytes)
+        }
         Ok(Err(msg)) => (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("task: {e}")).into_response(),
     }
+}
+
+fn jpeg_response(bytes: Vec<u8>) -> axum::response::Response {
+    (
+        [
+            ("content-type", "image/jpeg".to_string()),
+            ("cache-control", "max-age=3600".to_string()),
+        ],
+        bytes,
+    )
+        .into_response()
 }
 
 pub async fn list_runs(State(state): State<AppState>) -> Json<serde_json::Value> {

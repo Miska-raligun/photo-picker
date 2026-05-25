@@ -63,6 +63,18 @@ const enMessages = {
       stageBClipDesc:
         "After Stage A picks, photos are re-grouped by visual composition (same scene / framing). Lower → more shots merged as the same composition. 0.93 is a balanced default.",
 
+      minDtLabel: "Min burst gap (seconds)",
+      minDtDesc:
+        "Lower bound for the burst-merge time window. Two adjacent photos closer than this still need to pass similarity. Defaults to 0.3s — useful for fast 20+ fps bursts.",
+
+      maxDtLabel: "Max burst gap (seconds)",
+      maxDtDesc:
+        "Upper bound for the burst-merge time window. Prevents two photos minutes apart from joining the same burst even when CLIP says they look identical. 30s default.",
+
+      hashDistLabel: "pHash fallback distance",
+      hashDistDesc:
+        "Used only when CLIP is off — max Hamming distance between two photos' perceptual hashes for them to merge. 0 = identical bytes; 6 = lenient default.",
+
       enableClipLabel: "Run CLIP",
       enableClipDesc:
         "Vision model for visual similarity. Required for Stage B composition grouping AND the accurate Stage A burst check. Turning this off falls back to pHash and disables Stage B.",
@@ -114,6 +126,7 @@ const enMessages = {
       openHtmlReport: "Open full HTML report",
       viewResults: "View results",
       taskDetails: "Task details",
+      emptyGroups: "No composition groups for this run.",
     },
     groupCard: {
       keptSuffix: "kept",
@@ -243,6 +256,15 @@ export const messages: Record<Lang, Messages> = {
       stageBClipLabel: "构图相似度阈值",
       stageBClipDesc: "Stage A 选出来的照片再按视觉构图分组。调低 → 更多照片被视为同一构图；0.93 是平衡值。",
 
+      minDtLabel: "连拍时间窗最小值（秒）",
+      minDtDesc: "连拍合并时间窗的下限。相邻两张比这更近的仍需通过相似度判定。默认 0.3 秒，高速连拍（20+ fps）可调小。",
+
+      maxDtLabel: "连拍时间窗最大值（秒）",
+      maxDtDesc: "连拍合并时间窗的上限。即使 CLIP 判定视觉一致，间隔超过这个值也不会合并。默认 30 秒。",
+
+      hashDistLabel: "pHash 回退距离",
+      hashDistDesc: "仅在关闭 CLIP 时使用——两张照片感知哈希的最大汉明距离才合并。0 = 字节相同；6 = 默认宽松。",
+
       enableClipLabel: "启用 CLIP 视觉模型",
       enableClipDesc: "用于判断照片间的视觉相似度。Stage B 构图分组必需，Stage A 也用它代替粗糙的 pHash。关掉会退回 pHash 且无 Stage B。",
 
@@ -290,6 +312,7 @@ export const messages: Record<Lang, Messages> = {
       openHtmlReport: "打开完整 HTML 报告",
       viewResults: "查看结果",
       taskDetails: "任务结果",
+      emptyGroups: "本任务没有产生构图组。",
     },
     groupCard: {
       keptSuffix: "已选",

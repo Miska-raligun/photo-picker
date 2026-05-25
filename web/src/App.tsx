@@ -6,6 +6,7 @@ import { RunDetailDialog } from "./components/RunDetailDialog";
 import { GroupDetailDialog } from "./components/GroupDetailDialog";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { LanguageToggle } from "./components/LanguageToggle";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import { Button } from "./components/ui/button";
 import { Toaster } from "./components/ui/sonner";
 import { api } from "./lib/api";
@@ -35,16 +36,21 @@ export default function App() {
   const [detailRunId, setDetailRunId] = useState<string | null>(null);
   const [groupRun, setGroupRun] = useState<string | null>(null);
   const [groupIdx, setGroupIdx] = useState<number | null>(null);
-  const pollingRef = useRef<Set<string>>(new Set());
+  // Per-run AbortController — lets us cancel the polling loop on unmount or
+  // when the run finishes, without leaking a fetch-and-sleep loop forever.
+  const pollAbortRef = useRef<Map<string, AbortController>>(new Map());
 
   const schedulePoll = useCallback((runId: string) => {
-    if (pollingRef.current.has(runId)) return;
-    pollingRef.current.add(runId);
+    if (pollAbortRef.current.has(runId)) return;
+    const ac = new AbortController();
+    pollAbortRef.current.set(runId, ac);
     (async () => {
-      while (true) {
+      while (!ac.signal.aborted) {
         await new Promise((r) => setTimeout(r, 600));
+        if (ac.signal.aborted) break;
         try {
           const r = await api.getRun(runId);
+          if (ac.signal.aborted) break;
           setRuns((prev) => {
             const i = prev.findIndex((x) => x.id === runId);
             if (i === -1) return [r, ...prev];
@@ -57,8 +63,16 @@ export default function App() {
           break;
         }
       }
-      pollingRef.current.delete(runId);
+      pollAbortRef.current.delete(runId);
     })();
+  }, []);
+
+  // On unmount, abort every active poll.
+  useEffect(() => {
+    return () => {
+      for (const ac of pollAbortRef.current.values()) ac.abort();
+      pollAbortRef.current.clear();
+    };
   }, []);
 
   useEffect(() => {
@@ -151,11 +165,12 @@ export default function App() {
           ) : (
             <div className="space-y-4">
               {runs.map((r) => (
-                <RunCard
-                  key={r.id}
-                  run={r}
-                  onOpenDetail={() => setDetailRunId(r.id)}
-                />
+                <ErrorBoundary key={r.id} resetKey={r.status.state}>
+                  <RunCard
+                    run={r}
+                    onOpenDetail={() => setDetailRunId(r.id)}
+                  />
+                </ErrorBoundary>
               ))}
             </div>
           )}

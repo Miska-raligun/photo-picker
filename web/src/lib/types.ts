@@ -72,6 +72,7 @@ export interface ScanRequest {
   min_dt?: number;
   max_dt?: number;
   hash_dist?: number;
+  // The Rust side reads `min_dt` / `max_dt` as f32 seconds; the form passes them.
   stage_a_clip_threshold?: number;
   stage_b_threshold?: number;
   enable_clip?: boolean;

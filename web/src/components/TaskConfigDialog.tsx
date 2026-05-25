@@ -41,6 +41,9 @@ export function TaskConfigDialog({
   const [k1, setK1] = useState(3);
   const [k2, setK2] = useState(1);
   const [timeK, setTimeK] = useState(3.0);
+  const [minDt, setMinDt] = useState(0.3);
+  const [maxDt, setMaxDt] = useState(30.0);
+  const [hashDist, setHashDist] = useState(6);
   const [stageAClip, setStageAClip] = useState(0.95);
   const [stageBClip, setStageBClip] = useState(0.93);
   const [enableClip, setEnableClip] = useState(true);
@@ -55,6 +58,9 @@ export function TaskConfigDialog({
         k1,
         k2,
         time_k: timeK,
+        min_dt: minDt,
+        max_dt: maxDt,
+        hash_dist: hashDist,
         stage_a_clip_threshold: stageAClip,
         stage_b_threshold: stageBClip,
         enable_clip: enableClip,
@@ -177,6 +183,43 @@ export function TaskConfigDialog({
               min={0.7}
               max={1}
               step={0.01}
+            />
+          </FieldHelp>
+
+          <div className="grid sm:grid-cols-2 gap-5">
+            <FieldHelp label={m.scanForm.minDtLabel} desc={m.scanForm.minDtDesc}>
+              <SliderInput
+                value={minDt}
+                onChange={setMinDt}
+                min={0}
+                max={5}
+                step={0.05}
+              />
+            </FieldHelp>
+            <FieldHelp label={m.scanForm.maxDtLabel} desc={m.scanForm.maxDtDesc}>
+              <SliderInput
+                value={maxDt}
+                onChange={setMaxDt}
+                min={1}
+                max={120}
+                step={1}
+              />
+            </FieldHelp>
+          </div>
+
+          <FieldHelp
+            label={m.scanForm.hashDistLabel}
+            htmlFor="hash_dist"
+            desc={m.scanForm.hashDistDesc}
+          >
+            <Input
+              id="hash_dist"
+              type="number"
+              min={0}
+              max={32}
+              value={hashDist}
+              onChange={(e) => setHashDist(parseInt(e.target.value) || 0)}
+              className="text-sm w-24"
             />
           </FieldHelp>
 

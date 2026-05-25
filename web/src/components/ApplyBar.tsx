@@ -25,13 +25,27 @@ interface Props {
 
 export function ApplyBar({ runId, picks, overrides, sourceRoot, onDone }: Props) {
   const m = useM();
-  // Final delete list = (algo-rejected & not flipped) + (algo-kept & flipped)
-  const algoRejected = picks.flatMap((p) => p.rejected.map((r) => r.photo_id));
-  const algoKept = picks.flatMap((p) => p.kept.map((k) => k.photo_id));
-  const toDelete = [
-    ...algoRejected.filter((id) => !overrides.has(id)),
-    ...algoKept.filter((id) => overrides.has(id)),
-  ];
+  // Walk all photos in the run with their algorithmic verdict; flip per
+  // overrides; collect both ids and filenames of what we're about to delete
+  // so the confirm dialog can show the user the actual names.
+  type Targ = { id: string; filename: string | null };
+  const targets: Targ[] = [];
+  for (const p of picks) {
+    for (const r of p.rejected) {
+      if (!overrides.has(r.photo_id)) {
+        targets.push({ id: r.photo_id, filename: r.filename });
+      }
+    }
+    for (const k of p.kept) {
+      if (overrides.has(k.photo_id)) {
+        targets.push({ id: k.photo_id, filename: k.filename });
+      }
+    }
+  }
+  const toDelete = targets.map((t) => t.id);
+  const deleteFilenames = targets
+    .map((t) => t.filename)
+    .filter((n): n is string => !!n);
   const overrideCount = overrides.size;
 
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -98,7 +112,7 @@ export function ApplyBar({ runId, picks, overrides, sourceRoot, onDone }: Props)
       </div>
 
       <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle>{m.applyBar.confirmTitle}</DialogTitle>
             <DialogDescription>
@@ -111,6 +125,20 @@ export function ApplyBar({ runId, picks, overrides, sourceRoot, onDone }: Props)
               {toDelete.length === 1 ? m.applyBar.rejectedFile : m.applyBar.rejectedFiles}.
             </DialogDescription>
           </DialogHeader>
+          {deleteFilenames.length > 0 && (
+            <div className="border border-border bg-muted/40 rounded-md max-h-48 overflow-auto p-2 font-mono text-[0.72rem] leading-relaxed">
+              {deleteFilenames.slice(0, 50).map((name) => (
+                <div key={name} className="truncate text-muted-foreground">
+                  {name}
+                </div>
+              ))}
+              {deleteFilenames.length > 50 && (
+                <div className="text-muted-foreground italic">
+                  … +{deleteFilenames.length - 50} more
+                </div>
+              )}
+            </div>
+          )}
           <div className="space-y-2 py-2">
             <p className="text-xs text-muted-foreground">
               {overrideCount}{" "}

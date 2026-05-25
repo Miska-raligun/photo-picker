@@ -1,4 +1,4 @@
-import { ExternalLink } from "lucide-react";
+import { ExternalLink, Loader2 } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -37,6 +37,8 @@ export function RunDetailDialog({
   if (!run) return null;
   const report = run.report;
   const picks = run.composition_picks ?? [];
+  const isRunning = run.status.state === "running";
+  const isFailed = run.status.state === "failed";
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -105,6 +107,25 @@ export function RunDetailDialog({
                 <ScrollBar orientation="horizontal" />
               </ScrollArea>
             </>
+          )}
+
+          {isRunning && (
+            <div className="flex items-center justify-center gap-2 text-muted-foreground py-12 border border-dashed rounded-xl">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              <span className="text-sm">{m.runCard.scanInProgress}…</span>
+            </div>
+          )}
+
+          {!isRunning && !isFailed && picks.length === 0 && (
+            <div className="rounded-xl border border-dashed text-center text-muted-foreground italic text-sm py-12">
+              {m.runCard.emptyGroups}
+            </div>
+          )}
+
+          {isFailed && run.status.state === "failed" && (
+            <div className="text-destructive text-sm font-mono bg-destructive/10 border border-destructive/20 rounded-md p-3 whitespace-pre-wrap">
+              {run.status.error}
+            </div>
           )}
 
           {run.in_place && picks.length > 0 && (
