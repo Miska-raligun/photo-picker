@@ -9,6 +9,13 @@ use crate::ingest::PhotoId;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+/// Cosine similarity for already L2-normalized vectors — a plain dot product.
+/// Both stages compare CLIP embeddings, which `ClipEncoder` L2-normalizes on
+/// output, so the norm terms are 1.
+pub(crate) fn cosine_normalized(a: &[f32], b: &[f32]) -> f32 {
+    a.iter().zip(b).map(|(x, y)| x * y).sum()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct GroupId(pub Uuid);
 

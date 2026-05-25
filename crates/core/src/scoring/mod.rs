@@ -10,6 +10,7 @@ pub mod aesthetic;
 pub mod composition;
 pub mod exposure;
 pub mod face;
+#[cfg(feature = "onnx")]
 pub mod face_yunet;
 pub mod noise;
 pub mod scene;
@@ -19,6 +20,7 @@ pub mod wb;
 pub use aesthetic::{AestheticScorer, HeuristicAestheticScorer, NeutralAestheticStub};
 pub use composition::{CompositionScorer, HeuristicCompositionScorer, NeutralCompositionStub};
 pub use face::{FaceBox, FaceDetector, FaceInfo, NoFaceDetectorStub};
+#[cfg(feature = "onnx")]
 pub use face_yunet::YunetFaceDetector;
 pub use scene::{classify_scene, FinalWeights, Scene};
 

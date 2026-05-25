@@ -10,10 +10,19 @@ name = "photo_pick_core"
 path = "src/lib.rs"
 
 [features]
-default  = []
-cuda     = []
-coreml   = []
-directml = []
+default  = ["onnx"]
+# ONNX-backed models (CLIP embeddings + YuNet faces). Disable to build/test the
+# pure-Rust pipeline (ingest, scoring, grouping, cache) without linking the
+# onnxruntime static library.
+onnx     = ["dep:ort", "dep:ndarray"]
+cuda     = ["onnx"]
+coreml   = ["onnx"]
+directml = ["onnx"]
+
+[[bin]]
+name = "clip_smoke"
+path = "src/bin/clip_smoke.rs"
+required-features = ["onnx"]
 
 [dev-dependencies]
 tempfile = "3"
@@ -32,8 +41,8 @@ serde             = { workspace = true }
 serde_json        = { workspace = true }
 thiserror         = { workspace = true }
 tracing           = { workspace = true }
-ort               = { workspace = true }
-ndarray           = { workspace = true }
+ort               = { workspace = true, optional = true }
+ndarray           = { workspace = true, optional = true }
 ureq              = { workspace = true }
 dirs              = { workspace = true }
 hex               = { workspace = true }

@@ -1,12 +1,16 @@
 use super::{hash::HashOnlyExtractor, FeatureExtractor, PhotoFeatures};
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::ingest::PhotoRef;
-use crate::models::ClipEncoder;
 use crate::scoring::{
     compute_raw_scores, AestheticScorer, CompositionScorer, FaceDetector,
     HeuristicAestheticScorer, HeuristicCompositionScorer, NoFaceDetectorStub,
 };
 use image::DynamicImage;
+#[cfg(feature = "onnx")]
+use crate::error::Error;
+#[cfg(feature = "onnx")]
+use crate::models::ClipEncoder;
+#[cfg(feature = "onnx")]
 use std::sync::Mutex;
 
 /// Combines hash extraction + M2 technical scorers + (optionally) CLIP
@@ -19,6 +23,7 @@ use std::sync::Mutex;
 /// one model copy.
 pub struct FullExtractor {
     hashes: HashOnlyExtractor,
+    #[cfg(feature = "onnx")]
     clip: Option<Mutex<ClipEncoder>>,
     face: Box<dyn FaceDetector>,
     aesthetic: Box<dyn AestheticScorer>,
@@ -27,19 +32,27 @@ pub struct FullExtractor {
 
 impl Default for FullExtractor {
     fn default() -> Self {
-        Self::new(None)
+        Self::new()
     }
 }
 
 impl FullExtractor {
-    pub fn new(clip: Option<ClipEncoder>) -> Self {
+    pub fn new() -> Self {
         Self {
             hashes: HashOnlyExtractor::new(),
-            clip: clip.map(Mutex::new),
+            #[cfg(feature = "onnx")]
+            clip: None,
             face: Box::new(NoFaceDetectorStub),
             aesthetic: Box::new(HeuristicAestheticScorer),
             composition: Box::new(HeuristicCompositionScorer),
         }
+    }
+
+    /// Attach a CLIP encoder for embedding extraction (Stage B input).
+    #[cfg(feature = "onnx")]
+    pub fn with_clip(mut self, clip: Option<ClipEncoder>) -> Self {
+        self.clip = clip.map(Mutex::new);
+        self
     }
 
     /// Builder-style override for the face detector. Use to swap the stub for
@@ -65,12 +78,15 @@ impl FeatureExtractor for FullExtractor {
         let base = self.hashes.extract(photo, thumb)?;
         let raw = compute_raw_scores(thumb, photo);
 
+        #[cfg(feature = "onnx")]
         let clip_embed = if let Some(mu) = &self.clip {
             let mut guard = mu.lock().map_err(|_| Error::Config("clip mutex poisoned".into()))?;
             Some(guard.embed(thumb)?)
         } else {
             None
         };
+        #[cfg(not(feature = "onnx"))]
+        let clip_embed: Option<Vec<f32>> = None;
 
         let aesthetic = self.aesthetic.score(thumb);
         let composition = self.composition.score(thumb);

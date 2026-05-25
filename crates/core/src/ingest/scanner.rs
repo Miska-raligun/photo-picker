@@ -1,5 +1,6 @@
 use super::{exif::extract_exif_info, ImageFormat, PhotoId, PhotoRef, RawKind};
 use crate::error::{Error, Result};
+use rayon::prelude::*;
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -43,12 +44,16 @@ impl Default for FsScanner {
 
 impl Scanner for FsScanner {
     fn scan(&self, root: &Path) -> Result<Vec<PhotoRef>> {
-        let mut out = Vec::new();
+        // Walk the tree sequentially (cheap directory listing), collecting
+        // supported files. The expensive per-file work — full-content SHA-256
+        // plus EXIF parsing — is then run in parallel, since on large libraries
+        // it dominates and is embarrassingly parallel.
         let walker = WalkDir::new(root)
             .follow_links(self.follow_symlinks)
             .into_iter()
             .filter_entry(|e| !is_hidden(e.path()));
 
+        let mut candidates: Vec<(PathBuf, ImageFormat)> = Vec::new();
         for entry in walker {
             let entry = match entry {
                 Ok(e) => e,
@@ -62,12 +67,20 @@ impl Scanner for FsScanner {
             }
             let path = entry.path();
             let Some(format) = classify(path) else { continue };
-
-            match build_photo_ref(path.to_path_buf(), format) {
-                Ok(p) => out.push(p),
-                Err(err) => tracing::warn!(path = %path.display(), %err, "skipping unreadable photo"),
-            }
+            candidates.push((path.to_path_buf(), format));
         }
+
+        // `par_iter().collect()` preserves input (walk) order.
+        let out: Vec<PhotoRef> = candidates
+            .into_par_iter()
+            .filter_map(|(path, format)| match build_photo_ref(path.clone(), format) {
+                Ok(p) => Some(p),
+                Err(err) => {
+                    tracing::warn!(path = %path.display(), %err, "skipping unreadable photo");
+                    None
+                }
+            })
+            .collect();
 
         if out.is_empty() {
             return Err(Error::EmptyScan { root: root.to_path_buf() });
@@ -165,4 +178,48 @@ fn hash_prefix(path: &Path) -> Result<[u8; 16]> {
     let mut out = [0u8; 16];
     out.copy_from_slice(&digest[..16]);
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::tempdir;
+
+    #[test]
+    fn scans_supported_files_skips_hidden_and_unsupported() {
+        let dir = tempdir().unwrap();
+        // tempdir's own name starts with ".tmp", which `is_hidden` would filter;
+        // scan a normal-named subdirectory instead (mirrors a real user folder).
+        let root = dir.path().join("photos");
+        fs::create_dir(&root).unwrap();
+        let root = root.as_path();
+        fs::write(root.join("a.jpg"), b"not-a-real-jpeg-but-fine-for-hashing").unwrap();
+        fs::write(root.join("b.JPEG"), b"another").unwrap();
+        fs::write(root.join("c.nef"), b"raw-bytes").unwrap();
+        fs::write(root.join("notes.txt"), b"ignore me").unwrap();
+        fs::write(root.join(".hidden.jpg"), b"hidden").unwrap();
+
+        let scanner = FsScanner::default();
+        let mut refs = scanner.scan(root).unwrap();
+
+        assert_eq!(refs.len(), 3, "3 supported, non-hidden files");
+        refs.sort_by(|a, b| a.path.cmp(&b.path));
+        let names: Vec<_> = refs
+            .iter()
+            .filter_map(|r| r.path.file_name().and_then(|n| n.to_str()))
+            .collect();
+        assert_eq!(names, ["a.jpg", "b.JPEG", "c.nef"]);
+        // Distinct content must yield distinct content hashes.
+        assert_ne!(refs[0].sha256_short, refs[1].sha256_short);
+    }
+
+    #[test]
+    fn empty_directory_errors() {
+        let dir = tempdir().unwrap();
+        let root = dir.path().join("photos");
+        fs::create_dir(&root).unwrap();
+        let err = FsScanner::default().scan(&root);
+        assert!(matches!(err, Err(Error::EmptyScan { .. })));
+    }
 }

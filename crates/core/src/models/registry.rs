@@ -1,5 +1,8 @@
+#[cfg(feature = "onnx")]
 use crate::error::{Error, Result};
+#[cfg(feature = "onnx")]
 use ort::session::{Session, builder::SessionBuilder};
+#[cfg(feature = "onnx")]
 use std::path::Path;
 
 /// Hardware backend for ONNX inference.
@@ -23,6 +26,7 @@ impl Default for ExecutionProvider {
 /// Build a Session for an ONNX model, configuring the requested provider.
 /// Falls back to CPU with a warning when the requested provider isn't
 /// compiled in or fails to initialize.
+#[cfg(feature = "onnx")]
 pub fn build_session(model_path: &Path, ep: ExecutionProvider) -> Result<Session> {
     let mut builder: SessionBuilder = Session::builder()
         .map_err(|e| Error::Config(format!("ort session builder: {e}")))?;
@@ -40,7 +44,7 @@ pub fn build_session(model_path: &Path, ep: ExecutionProvider) -> Result<Session
         .map_err(|e| Error::Config(format!("load model {}: {e}", model_path.display())))
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "onnx", feature = "cuda"))]
 fn apply_execution_provider(
     builder: SessionBuilder,
     ep: ExecutionProvider,
@@ -55,7 +59,7 @@ fn apply_execution_provider(
     Ok(builder)
 }
 
-#[cfg(feature = "coreml")]
+#[cfg(all(feature = "onnx", feature = "coreml"))]
 fn apply_execution_provider(
     builder: SessionBuilder,
     ep: ExecutionProvider,
@@ -70,7 +74,7 @@ fn apply_execution_provider(
     Ok(builder)
 }
 
-#[cfg(not(any(feature = "cuda", feature = "coreml", feature = "directml")))]
+#[cfg(all(feature = "onnx", not(any(feature = "cuda", feature = "coreml", feature = "directml"))))]
 fn apply_execution_provider(
     builder: SessionBuilder,
     ep: ExecutionProvider,

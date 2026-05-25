@@ -1,4 +1,4 @@
-use super::{unionfind::UnionFind, Group, GroupId};
+use super::{cosine_normalized, unionfind::UnionFind, Group, GroupId};
 use crate::features::{hash::hamming, PhotoFeatures};
 use crate::ingest::{PhotoId, PhotoRef};
 use std::collections::HashMap;
@@ -122,11 +122,6 @@ fn compute_delta_t(timed_sorted: &[&PhotoRef], params: &StageAParams) -> f32 {
     proposed
         .max(params.min_dt.as_secs_f32())
         .min(params.max_dt.as_secs_f32())
-}
-
-/// Dot product on L2-normalized vectors == cosine similarity.
-fn cosine_normalized(a: &[f32], b: &[f32]) -> f32 {
-    a.iter().zip(b).map(|(x, y)| x * y).sum()
 }
 
 fn seconds_between(a: &PhotoRef, b: &PhotoRef) -> f32 {
