@@ -14,9 +14,13 @@
 pub mod cache;
 #[cfg(feature = "onnx")]
 pub mod clip;
+#[cfg(feature = "onnx")]
+pub mod pool;
 pub mod registry;
 
 pub use cache::{ensure_model, ModelDescriptor};
 #[cfg(feature = "onnx")]
 pub use clip::{ClipEncoder, CLIP_EMBED_DIM};
+#[cfg(feature = "onnx")]
+pub use pool::{default_size as default_pool_size, SessionPool};
 pub use registry::ExecutionProvider;

@@ -7,24 +7,20 @@ use crate::scoring::{
 };
 use image::DynamicImage;
 #[cfg(feature = "onnx")]
-use crate::error::Error;
-#[cfg(feature = "onnx")]
-use crate::models::ClipEncoder;
-#[cfg(feature = "onnx")]
-use std::sync::Mutex;
+use crate::models::{ClipEncoder, SessionPool};
 
 /// Combines hash extraction + M2 technical scorers + (optionally) CLIP
 /// embedding + M3 model-driven scorers in a single pass over the thumbnail,
 /// so the file is decoded once per photo.
 ///
-/// The CLIP session is wrapped in `Mutex` because `ort::Session` is `Send` but
-/// not `Sync`. Inference is internally multi-threaded by onnxruntime, so
-/// serializing it across rayon workers loses little while keeping memory at
-/// one model copy.
+/// CLIP runs through a `SessionPool` so rayon workers can run multiple
+/// inferences concurrently instead of serializing on a single `Mutex`. Pool
+/// size defaults to 2 (configurable via `PHOTO_PICK_INFERENCE_POOL_SIZE`) —
+/// each session is an independent ONNX model copy (~150 MB).
 pub struct FullExtractor {
     hashes: HashOnlyExtractor,
     #[cfg(feature = "onnx")]
-    clip: Option<Mutex<ClipEncoder>>,
+    clip: Option<SessionPool<ClipEncoder>>,
     face: Box<dyn FaceDetector>,
     aesthetic: Box<dyn AestheticScorer>,
     composition: Box<dyn CompositionScorer>,
@@ -48,10 +44,11 @@ impl FullExtractor {
         }
     }
 
-    /// Attach a CLIP encoder for embedding extraction (Stage B input).
+    /// Attach a CLIP encoder pool for embedding extraction (Stage B input).
+    /// The caller decides how many sessions to load; `None` disables CLIP.
     #[cfg(feature = "onnx")]
-    pub fn with_clip(mut self, clip: Option<ClipEncoder>) -> Self {
-        self.clip = clip.map(Mutex::new);
+    pub fn with_clip_pool(mut self, pool: Option<SessionPool<ClipEncoder>>) -> Self {
+        self.clip = pool;
         self
     }
 
@@ -79,9 +76,8 @@ impl FeatureExtractor for FullExtractor {
         let raw = compute_raw_scores(thumb, photo);
 
         #[cfg(feature = "onnx")]
-        let clip_embed = if let Some(mu) = &self.clip {
-            let mut guard = mu.lock().map_err(|_| Error::Config("clip mutex poisoned".into()))?;
-            Some(guard.embed(thumb)?)
+        let clip_embed = if let Some(pool) = &self.clip {
+            Some(pool.with(|enc| enc.embed(thumb))?)
         } else {
             None
         };

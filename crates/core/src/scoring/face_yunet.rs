@@ -13,13 +13,13 @@
 use super::face::{FaceBox, FaceDetector, FaceInfo};
 use crate::error::{Error, Result};
 use crate::models::cache::ensure_model;
+use crate::models::pool::{default_size as default_pool_size, SessionPool};
 use crate::models::registry::build_session;
 use crate::models::{ExecutionProvider, ModelDescriptor};
 use image::DynamicImage;
 use ndarray::Array4;
 use ort::session::Session;
 use ort::value::Tensor;
-use std::sync::Mutex;
 
 pub const YUNET_FACE: ModelDescriptor = ModelDescriptor {
     name: "yunet-face-2023mar",
@@ -35,16 +35,33 @@ const SCORE_THRESHOLD: f32 = 0.6;
 const NMS_IOU_THRESHOLD: f32 = 0.3;
 
 pub struct YunetFaceDetector {
-    session: Mutex<Session>,
+    sessions: SessionPool<Session>,
 }
 
 impl YunetFaceDetector {
+    /// Load a single session (back-compat for tests / callers that don't
+    /// care about throughput). Prefer `load_pool` for pipeline use.
     pub fn load(ep: ExecutionProvider) -> Result<Self> {
+        Self::load_pool(ep, 1)
+    }
+
+    /// Load `n` independent sessions into a pool. Each adds ~1 MB of RAM
+    /// (YuNet is tiny). Falls back to a single session if `n == 0`.
+    pub fn load_pool(ep: ExecutionProvider, n: usize) -> Result<Self> {
         let path = ensure_model(&YUNET_FACE)?;
-        let session = build_session(&path, ep)?;
+        let n = n.max(1);
+        let mut sessions = Vec::with_capacity(n);
+        for _ in 0..n {
+            sessions.push(build_session(&path, ep)?);
+        }
         Ok(Self {
-            session: Mutex::new(session),
+            sessions: SessionPool::new(sessions),
         })
+    }
+
+    /// Convenience: read the pool size from the env var.
+    pub fn load_pool_from_env(ep: ExecutionProvider) -> Result<Self> {
+        Self::load_pool(ep, default_pool_size())
     }
 }
 
@@ -67,28 +84,25 @@ impl YunetFaceDetector {
             .map_err(|e| Error::Config(format!("yunet input: {e}")))?;
 
         // Run inference and copy the output tensors out before releasing the
-        // session guard — the SessionOutputs borrows from the guard.
-        let stride_data: Vec<(u32, Vec<f32>, Vec<f32>, Vec<f32>, Vec<f32>)> = {
-            let mut guard = self
-                .session
-                .lock()
-                .map_err(|_| Error::Config("yunet mutex poisoned".into()))?;
-            let outputs = guard
-                .run(ort::inputs!["input" => input])
-                .map_err(|e| Error::Config(format!("yunet inference: {e}")))?;
-            STRIDES
-                .iter()
-                .map(|&s| -> Result<_> {
-                    Ok((
-                        s,
-                        read_f32_output(&outputs, &format!("cls_{s}"))?,
-                        read_f32_output(&outputs, &format!("obj_{s}"))?,
-                        read_f32_output(&outputs, &format!("bbox_{s}"))?,
-                        read_f32_output(&outputs, &format!("kps_{s}"))?,
-                    ))
-                })
-                .collect::<Result<Vec<_>>>()?
-        };
+        // session guard — the SessionOutputs borrows from the session.
+        let stride_data: Vec<(u32, Vec<f32>, Vec<f32>, Vec<f32>, Vec<f32>)> =
+            self.sessions.with(|session| -> Result<_> {
+                let outputs = session
+                    .run(ort::inputs!["input" => input])
+                    .map_err(|e| Error::Config(format!("yunet inference: {e}")))?;
+                STRIDES
+                    .iter()
+                    .map(|&s| -> Result<_> {
+                        Ok((
+                            s,
+                            read_f32_output(&outputs, &format!("cls_{s}"))?,
+                            read_f32_output(&outputs, &format!("obj_{s}"))?,
+                            read_f32_output(&outputs, &format!("bbox_{s}"))?,
+                            read_f32_output(&outputs, &format!("kps_{s}"))?,
+                        ))
+                    })
+                    .collect::<Result<Vec<_>>>()
+            })?;
 
         let mut candidates: Vec<RawFace> = Vec::new();
         for (stride, cls, obj, bbox, kps) in &stride_data {

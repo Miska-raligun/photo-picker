@@ -8,7 +8,7 @@ use crate::ingest::{
 };
 use crate::models::ExecutionProvider;
 #[cfg(feature = "onnx")]
-use crate::models::ClipEncoder;
+use crate::models::{ClipEncoder, SessionPool};
 #[cfg(feature = "onnx")]
 use crate::scoring::YunetFaceDetector;
 use crate::output::{
@@ -202,11 +202,12 @@ impl Pipeline {
 
             #[cfg(feature = "onnx")]
             {
-                let clip = if self.cfg.enable_clip {
-                    match ClipEncoder::load(self.cfg.execution_provider) {
-                        Ok(e) => {
-                            tracing::info!("CLIP encoder loaded");
-                            Some(e)
+                let pool_size = crate::models::default_pool_size();
+                let clip_pool = if self.cfg.enable_clip {
+                    match load_clip_pool(self.cfg.execution_provider, pool_size) {
+                        Ok(p) => {
+                            tracing::info!(sessions = p.len(), "CLIP encoder pool loaded");
+                            Some(p)
                         }
                         Err(err) => {
                             tracing::warn!(%err, "CLIP load failed; continuing without Stage B");
@@ -216,13 +217,16 @@ impl Pipeline {
                 } else {
                     None
                 };
-                clip_enabled = clip.is_some();
-                extractor = extractor.with_clip(clip);
+                clip_enabled = clip_pool.is_some();
+                extractor = extractor.with_clip_pool(clip_pool);
 
                 if self.cfg.enable_face {
-                    match YunetFaceDetector::load(self.cfg.execution_provider) {
+                    match YunetFaceDetector::load_pool(self.cfg.execution_provider, pool_size) {
                         Ok(d) => {
-                            tracing::info!("YuNet face detector loaded");
+                            tracing::info!(
+                                "YuNet face detector loaded (pool size {})",
+                                pool_size
+                            );
                             extractor = extractor.with_face_detector(Box::new(d));
                         }
                         Err(err) => {
@@ -441,4 +445,17 @@ impl Pipeline {
             photos: photos_by_id,
         })
     }
+}
+
+#[cfg(feature = "onnx")]
+fn load_clip_pool(
+    ep: ExecutionProvider,
+    n: usize,
+) -> Result<SessionPool<ClipEncoder>> {
+    let n = n.max(1);
+    let mut encoders = Vec::with_capacity(n);
+    for _ in 0..n {
+        encoders.push(ClipEncoder::load(ep)?);
+    }
+    Ok(SessionPool::new(encoders))
 }
