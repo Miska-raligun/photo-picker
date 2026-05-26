@@ -11,7 +11,17 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 #[derive(Parser, Debug)]
-#[command(name = "photo-pick", version, about = "Intelligent photo culling for burst shots")]
+#[command(
+    name = "photo-pick",
+    version,
+    about = "Intelligent photo culling for burst shots",
+    long_about = "Scan a folder of photos, cluster near-duplicate bursts, score each \
+        photo for technical quality + composition + face quality, and emit the top \
+        picks (hardlinked or copied into an output folder). Outputs an HTML report \
+        you can open in any browser plus a machine-readable JSON.\n\n\
+        Pipeline: Stage A bursts (time + CLIP) → top-K1 by technical score → \
+        Stage B composition groups (CLIP) → top-K2 by scene-aware final score."
+)]
 struct Cli {
     #[command(subcommand)]
     command: Cmd,
@@ -24,93 +34,136 @@ enum Cmd {
 }
 
 #[derive(Parser, Debug)]
+#[command(
+    long_about = "Run the full pipeline against ROOT and write picks to --output. \
+        Sensible defaults (K1=3, K2=1, hardlink) match a typical event/portrait \
+        shoot.\n\n\
+        Tuning cheatsheet:\n  \
+        • Want stricter culling     → lower --k1 (e.g. 1) and/or --k2 (1)\n  \
+        • Bursts splitting too eager → raise --time-k (e.g. 5.0) or --max-dt\n  \
+        • Different shots merging   → raise --stage-b-threshold (e.g. 0.96)\n  \
+        • No ML available           → --no-clip (falls back to pHash via --hash-dist)\n  \
+        • No portraits              → --no-face speeds extraction ~15%\n\n\
+        Example: photo-pick scan ./shoot --output ./picked --k1 2 --k2 1 --link hardlink"
+)]
 struct ScanArgs {
-    /// Directory to scan (recursive).
+    /// Directory to scan recursively. Supports JPEG, HEIC, and common RAW formats
+    /// (NEF, ARW, CR2/CR3, RAF, ORF, DNG). EXIF capture time is required for the
+    /// time-window component of Stage A clustering.
     root: PathBuf,
 
-    /// Output directory for selected files.
+    /// Where picked / rejected folders, the JSON + HTML report, and the feature
+    /// cache are written. Created if missing. Files inside a previous run's
+    /// output (other than `.cache.db`) are NOT cleaned automatically.
     #[arg(short, long, default_value = "./picked")]
     output: PathBuf,
 
-    /// Stage A per-group top-K (M1: not enforced, reserved for M2).
+    /// Per-burst keep count. Each Stage A burst contributes its top-K1 photos by
+    /// *technical* score (sharpness/exposure/WB/noise) to Stage B. Lower = harsher
+    /// culling. Default 3 keeps a safety margin in case Stage B reshuffles.
     #[arg(long, default_value_t = 3)]
     k1: usize,
 
-    /// Stage B per-group top-K (M3+).
+    /// Per-composition keep count. Each Stage B composition group emits its top-K2
+    /// photos by *final* score (scene-aware blend of tech/aesthetic/composition/face).
+    /// Usually 1 — raise to 2+ if you want bracketed alternates per scene.
     #[arg(long, default_value_t = 1)]
     k2: usize,
 
-    /// How to materialize selected files into the output directory.
+    /// How to materialize picks into <output>/picked:\n  \
+    /// hardlink — zero disk cost when source + output are on the same filesystem\n  \
+    /// copy     — safest; works across filesystems but uses real disk\n  \
+    /// symlink  — smallest, but breaks if you later move the source folder
     #[arg(long, value_enum, default_value_t = LinkModeArg::Hardlink)]
     link: LinkModeArg,
 
-    /// Stage A time-window scaling factor: Δt = time_k · median_dt.
+    /// Stage A time-window scaling factor: Δt = time_k · median_dt, where median_dt
+    /// is the median time gap between adjacent photos in the shoot. Larger →
+    /// looser bursts. 3× is conservative; high-speed shooters can lower to 1.5–2.
     #[arg(long, default_value_t = 3.0)]
     time_k: f32,
 
-    /// Stage A minimum time-window (seconds).
+    /// Floor for the adaptive burst time window in seconds. Prevents Δt from
+    /// collapsing to zero on shoots dominated by tiny gaps (20+ fps bursts).
     #[arg(long, default_value_t = 0.3)]
     min_dt: f32,
 
-    /// Stage A maximum time-window (seconds). Caps adaptive widening for sparse shoots.
+    /// Cap for the adaptive burst time window in seconds. Prevents two photos
+    /// minutes apart from joining the same burst even when CLIP says they look
+    /// identical (e.g. the same locked-off scene revisited later).
     #[arg(long, default_value_t = 30.0)]
     max_dt: f32,
 
-    /// Stage B CLIP cosine-similarity threshold for "same composition" merge.
+    /// Stage B CLIP cosine threshold for "same composition" merging. Higher →
+    /// stricter (only near-identical framings group together). Default 0.93
+    /// is balanced; 0.96+ tends to keep every alternate framing separate.
     #[arg(long, default_value_t = 0.93)]
     stage_b_threshold: f32,
 
-    /// Disable CLIP loading (skip Stage B; pipeline behaves like M2).
+    /// Skip loading CLIP entirely. Disables Stage B composition grouping and
+    /// falls back to pHash for the Stage A duplicate check (see --hash-dist).
+    /// Useful on machines without an onnxruntime build.
     #[arg(long)]
     no_clip: bool,
 
-    /// Disable face detection (skip YuNet; scenes default to landscape).
+    /// Skip face detection (YuNet). All photos treated as landscape; face_bonus
+    /// disabled; scene auto-detect collapses to landscape weights. Shaves ~15ms
+    /// per photo on CPU.
     #[arg(long)]
     no_face: bool,
 
-    /// Stage A maximum pHash Hamming distance (fallback when CLIP off).
+    /// pHash fallback: max Hamming distance (0–32) for two photos to merge into
+    /// the same burst when CLIP is disabled. 0 = identical bytes; 6 = lenient
+    /// default. Ignored when CLIP is enabled.
     #[arg(long, default_value_t = 6)]
     hash_dist: u32,
 
-    /// Stage A CLIP cosine similarity threshold for "same burst" — tighter
-    /// than the Stage B threshold because real bursts are nearly identical.
+    /// Stage A CLIP threshold — tighter than Stage B because real bursts are
+    /// nearly indistinguishable. 0.95 ≈ "looks identical". Lower → looser bursts.
     #[arg(long, default_value_t = 0.95)]
     stage_a_clip_threshold: f32,
 
-    /// Parallel worker count (default: physical CPUs).
+    /// Rayon worker count. Default: physical CPU cores. Lower if extraction is
+    /// starving other work on the machine.
     #[arg(short, long)]
     jobs: Option<usize>,
 
-    /// Skip writing files; only produce the report.
+    /// Don't write the picked/ or rejected/ folders; still produces reports.
+    /// Use to preview which photos would be picked before committing.
     #[arg(long)]
     dry_run: bool,
 
-    /// Write a JSON report to this path (default: <output>/report.json).
+    /// JSON report path (default: <output>/report.json). Always written unless
+    /// --dry-run AND this flag is not given.
     #[arg(long)]
     report: Option<PathBuf>,
 
-    /// Write a self-contained HTML report to this path (default: <output>/report.html).
+    /// HTML report path (default: <output>/report.html). Self-contained:
+    /// thumbnails are base64-embedded so the file is portable.
     #[arg(long)]
     html_report: Option<PathBuf>,
 
-    /// Skip the HTML report (otherwise generated alongside the JSON one).
+    /// Don't generate the HTML report (JSON-only output).
     #[arg(long)]
     no_html: bool,
 
-    /// Feature cache path (default: <output>/.cache.db). Re-runs against the
-    /// same directory reuse cached features and skip extraction.
+    /// SQLite cache for extracted features (default: <output>/.cache.db).
+    /// Subsequent runs against the same source skip extraction for unchanged
+    /// files (keyed by sha256 + size). Safe to delete; will be re-created.
     #[arg(long)]
     cache_db: Option<PathBuf>,
 
-    /// Disable the feature cache entirely (always re-extract).
+    /// Skip the feature cache entirely. Every photo is re-extracted from scratch
+    /// — useful when debugging the extractor or after upgrading models.
     #[arg(long)]
     no_cache: bool,
 
-    /// Increase log verbosity (-v, -vv).
+    /// Increase log verbosity: -v = debug, -vv = trace. Default is info.
+    /// Honors RUST_LOG / env-filter syntax if set.
     #[arg(short, action = clap::ArgAction::Count)]
     verbose: u8,
 
-    /// Suppress all output except errors.
+    /// Errors only. Suppresses progress bars and informational logs.
     #[arg(long)]
     quiet: bool,
 }
@@ -189,6 +242,7 @@ fn run_scan(args: ScanArgs) -> Result<()> {
         },
         stage_b: StageBParams {
             similarity_threshold: args.stage_b_threshold,
+            chain_margin: StageBParams::default().chain_margin,
         },
         k1: args.k1,
         k2: args.k2,

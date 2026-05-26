@@ -35,11 +35,15 @@ pub struct HeuristicCompositionScorer;
 
 impl CompositionScorer for HeuristicCompositionScorer {
     fn score(&self, thumb: &DynamicImage) -> f32 {
-        let est = estimate_subject(thumb);
-        if est.is_none() {
-            return 0.5;
-        }
-        let (center, area_ratio, edge_clip) = est.unwrap();
+        // Primary: Laplacian-saliency. Misses soft/backlit/silhouette subjects.
+        // Fallback: color-saliency (high-saturation region). Handles intentional
+        // soft focus + dramatic color subjects where edges are weak.
+        let (center, area_ratio, edge_clip) = match estimate_subject(thumb)
+            .or_else(|| estimate_subject_by_saturation(thumb))
+        {
+            Some(s) => s,
+            None => return 0.5,
+        };
 
         let thirds = thirds_score(center);
         // Gaussian, peak at 25% area, σ=15%.
@@ -48,6 +52,99 @@ impl CompositionScorer for HeuristicCompositionScorer {
 
         (0.5 * thirds + 0.3 * size + 0.2 * edge).clamp(0.0, 1.0)
     }
+}
+
+/// Saturation-based subject estimator. Used when the edge/Laplacian estimator
+/// fails (uniform luma, soft focus, silhouettes against bright skies). Returns
+/// the same `(centroid, area_ratio, edge_clip)` triple as `estimate_subject`.
+///
+/// Strategy: subsample to ≤256px, compute per-pixel HSV saturation as
+/// `(max−min) / max`, threshold at 60% of the image's peak saturation, then
+/// take the bbox + centroid of the accepted pixels.
+fn estimate_subject_by_saturation(img: &DynamicImage) -> Option<((f32, f32), f32, f32)> {
+    let rgb = img.to_rgb8();
+    let (w, h) = (rgb.width() as usize, rgb.height() as usize);
+    if w < 8 || h < 8 {
+        return None;
+    }
+    let raw = rgb.as_raw();
+    let stride = ((w.max(h) / 256).max(1)).max(1);
+    let sw = w.div_ceil(stride);
+    let sh = h.div_ceil(stride);
+    if sw < 4 || sh < 4 {
+        return None;
+    }
+
+    let mut sat = vec![0u8; sw * sh];
+    let mut max_sat = 0u8;
+    for sy in 0..sh {
+        for sx in 0..sw {
+            let ix = (sx * stride).min(w - 1);
+            let iy = (sy * stride).min(h - 1);
+            let off = (iy * w + ix) * 3;
+            let r = raw[off];
+            let g = raw[off + 1];
+            let b = raw[off + 2];
+            let mx = r.max(g).max(b);
+            let mn = r.min(g).min(b);
+            // HSV saturation × 255; mx==0 → fully black → no color → 0.
+            let s = if mx == 0 {
+                0
+            } else {
+                (((mx - mn) as u32 * 255) / mx as u32) as u8
+            };
+            sat[sy * sw + sx] = s;
+            if s > max_sat {
+                max_sat = s;
+            }
+        }
+    }
+    // Need a minimally colorful scene; otherwise this is no better than the
+    // Laplacian fallback returning 0.5.
+    if max_sat < 40 {
+        return None;
+    }
+    let threshold = ((max_sat as u32 * 60) / 100).max(30) as u8;
+
+    let mut sum_x = 0.0f64;
+    let mut sum_y = 0.0f64;
+    let mut count = 0.0f64;
+    let mut min_x = sw;
+    let mut min_y = sh;
+    let mut max_x = 0usize;
+    let mut max_y = 0usize;
+    for y in 0..sh {
+        for x in 0..sw {
+            if sat[y * sw + x] >= threshold {
+                sum_x += x as f64;
+                sum_y += y as f64;
+                count += 1.0;
+                if x < min_x { min_x = x; }
+                if y < min_y { min_y = y; }
+                if x > max_x { max_x = x; }
+                if y > max_y { max_y = y; }
+            }
+        }
+    }
+    if count < 4.0 {
+        return None;
+    }
+    let cx = sum_x / count / sw as f64;
+    let cy = sum_y / count / sh as f64;
+    let bbox_w = (max_x - min_x + 1) as f64;
+    let bbox_h = (max_y - min_y + 1) as f64;
+    let area = bbox_w * bbox_h / (sw as f64 * sh as f64);
+
+    let margin_x = sw / 30 + 1;
+    let margin_y = sh / 30 + 1;
+    let mut touches = 0u8;
+    if min_y < margin_y { touches += 1; }
+    if max_y + margin_y >= sh { touches += 1; }
+    if min_x < margin_x { touches += 1; }
+    if max_x + margin_x >= sw { touches += 1; }
+    let edge_clip = touches as f32 / 4.0;
+
+    Some(((cx as f32, cy as f32), area as f32, edge_clip))
 }
 
 /// Returns `(centroid in [0,1]², area_ratio, edge_clip_fraction)` for the
@@ -202,5 +299,29 @@ mod tests {
         let medium = HeuristicCompositionScorer.score(&dot_at(300, 100, 100, 40));
         let huge = HeuristicCompositionScorer.score(&dot_at(300, 100, 100, 140));
         assert!(medium > huge, "medium={medium} huge={huge}");
+    }
+
+    /// A soft-edge bright red blob on a neutral gray background — Laplacian
+    /// saliency may miss it (low edge energy), but the color fallback should
+    /// localize it, yielding a non-neutral score.
+    #[test]
+    fn color_fallback_localizes_soft_subject() {
+        let mut img = image::RgbImage::new(300, 300);
+        for (x, y, p) in img.enumerate_pixels_mut() {
+            let dx = x as f32 - 100.0;
+            let dy = y as f32 - 100.0;
+            let d2 = dx * dx + dy * dy;
+            // Soft red blob with a wide gaussian falloff into mid gray.
+            let fall = (-d2 / 3000.0).exp();
+            let r = (128.0 + 127.0 * fall) as u8;
+            let g = (128.0 - 60.0 * fall) as u8;
+            let b = (128.0 - 60.0 * fall) as u8;
+            *p = image::Rgb([r, g, b]);
+        }
+        let s = HeuristicCompositionScorer.score(&DynamicImage::ImageRgb8(img));
+        assert!(
+            (s - 0.5).abs() > 0.05,
+            "expected non-neutral score from color fallback, got {s}"
+        );
     }
 }

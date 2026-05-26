@@ -126,6 +126,7 @@ const enMessages = {
       showKey: "Show",
       hideKey: "Hide",
       clearSaved: "Clear saved",
+      requiredFields: "URL / API key / model required for custom mode",
     },
     runCard: {
       scanInProgress: "scan in progress",
@@ -172,6 +173,9 @@ const enMessages = {
       aiRank: "AI",
       viewOriginal: "View original",
       openInNewTab: "Open in new tab",
+      previewFailed: "failed to load preview",
+      toggleToReject: "Currently keeping (click to mark for delete)",
+      toggleToKeep: "Will delete (click to mark to keep)",
     },
     applyBar: {
       willDelete: "Will delete",
@@ -327,6 +331,7 @@ export const messages: Record<Lang, Messages> = {
       showKey: "显示",
       hideKey: "隐藏",
       clearSaved: "清除已保存",
+      requiredFields: "自定义模式需要 URL / API key / 模型名",
     },
     runCard: {
       scanInProgress: "扫描中",
@@ -373,6 +378,9 @@ export const messages: Record<Lang, Messages> = {
       aiRank: "AI",
       viewOriginal: "查看原图",
       openInNewTab: "在新标签页打开",
+      previewFailed: "预览加载失败",
+      toggleToReject: "保留中（点击改为删除）",
+      toggleToKeep: "将删除（点击改为保留）",
     },
     applyBar: {
       willDelete: "即将删除",

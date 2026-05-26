@@ -23,6 +23,9 @@ pub fn raw(gray: &GrayImage) -> f32 {
         (5 * w / 6, 5 * h / 6),
     ];
 
+    let buf = gray.as_raw();
+    let stride = w as usize;
+
     let mut best = 0.0f32;
     for &(cx, cy) in &centers {
         let half = roi_size / 2;
@@ -32,15 +35,75 @@ pub fn raw(gray: &GrayImage) -> f32 {
         let y = cy
             .saturating_sub(half)
             .min(h.saturating_sub(roi_size).max(0));
-        let roi = image::imageops::crop_imm(gray, x, y, roi_size, roi_size).to_image();
-        let lv = laplacian_variance(&roi);
-        let tg = tenengrad(&roi);
+        let lv = laplacian_variance_window(buf, stride, x as usize, y as usize, roi_size as usize);
+        let tg = tenengrad_window(buf, stride, x as usize, y as usize, roi_size as usize);
         let s = 0.6 * lv + 0.4 * tg;
         if s > best {
             best = s;
         }
     }
     best
+}
+
+/// Window-based Laplacian variance — reads directly from the parent gray
+/// buffer instead of allocating a `crop_imm(...).to_image()` per ROI.
+/// `(x, y)` is the ROI's top-left in pixels, `size` is its edge length.
+fn laplacian_variance_window(buf: &[u8], stride: usize, x: usize, y: usize, size: usize) -> f32 {
+    if size < 3 {
+        return 0.0;
+    }
+    let n = (size - 2) * (size - 2);
+    if n == 0 {
+        return 0.0;
+    }
+    let mut sum = 0.0f32;
+    let mut sum_sq = 0.0f32;
+    for ry in 1..size - 1 {
+        let row = (y + ry) * stride + x;
+        let row_up = (y + ry - 1) * stride + x;
+        let row_dn = (y + ry + 1) * stride + x;
+        for rx in 1..size - 1 {
+            let c = buf[row + rx] as i32;
+            let u = buf[row_up + rx] as i32;
+            let d = buf[row_dn + rx] as i32;
+            let l = buf[row + rx - 1] as i32;
+            let r = buf[row + rx + 1] as i32;
+            let v = (4 * c - u - d - l - r) as f32;
+            sum += v;
+            sum_sq += v * v;
+        }
+    }
+    let nf = n as f32;
+    let mean = sum / nf;
+    (sum_sq / nf) - mean * mean
+}
+
+fn tenengrad_window(buf: &[u8], stride: usize, x: usize, y: usize, size: usize) -> f32 {
+    if size < 3 {
+        return 0.0;
+    }
+    let mut sum = 0.0f32;
+    let mut count = 0u32;
+    for ry in 1..size - 1 {
+        let row = (y + ry) * stride + x;
+        let row_up = (y + ry - 1) * stride + x;
+        let row_dn = (y + ry + 1) * stride + x;
+        for rx in 1..size - 1 {
+            let ul = buf[row_up + rx - 1] as f32;
+            let uu = buf[row_up + rx] as f32;
+            let ur = buf[row_up + rx + 1] as f32;
+            let ml = buf[row + rx - 1] as f32;
+            let mr = buf[row + rx + 1] as f32;
+            let dl = buf[row_dn + rx - 1] as f32;
+            let dd = buf[row_dn + rx] as f32;
+            let dr = buf[row_dn + rx + 1] as f32;
+            let sx = -ul - 2.0 * ml - dl + ur + 2.0 * mr + dr;
+            let sy = -ul - 2.0 * uu - ur + dl + 2.0 * dd + dr;
+            sum += (sx * sx + sy * sy).sqrt();
+            count += 1;
+        }
+    }
+    if count == 0 { 0.0 } else { sum / count as f32 }
 }
 
 /// Variance of the 4-neighbor Laplacian over a grayscale region — a standard
@@ -66,33 +129,6 @@ pub(crate) fn laplacian_variance(roi: &GrayImage) -> f32 {
     let n = vals.len() as f32;
     let mean = vals.iter().sum::<f32>() / n;
     vals.iter().map(|v| (v - mean).powi(2)).sum::<f32>() / n
-}
-
-fn tenengrad(roi: &GrayImage) -> f32 {
-    let (w, h) = (roi.width() as i32, roi.height() as i32);
-    if w < 3 || h < 3 {
-        return 0.0;
-    }
-    let mut sum = 0.0f32;
-    let mut count = 0u32;
-    for y in 1..h - 1 {
-        for x in 1..w - 1 {
-            let p = |dx: i32, dy: i32| {
-                roi.get_pixel((x + dx) as u32, (y + dy) as u32).0[0] as f32
-            };
-            let sx = -p(-1, -1) - 2.0 * p(-1, 0) - p(-1, 1)
-                + p(1, -1)
-                + 2.0 * p(1, 0)
-                + p(1, 1);
-            let sy = -p(-1, -1) - 2.0 * p(0, -1) - p(1, -1)
-                + p(-1, 1)
-                + 2.0 * p(0, 1)
-                + p(1, 1);
-            sum += (sx * sx + sy * sy).sqrt();
-            count += 1;
-        }
-    }
-    if count == 0 { 0.0 } else { sum / count as f32 }
 }
 
 #[cfg(test)]

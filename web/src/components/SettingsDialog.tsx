@@ -61,7 +61,7 @@ export function SettingsDialog({ open, onOpenChange, initial, onChange }: Props)
   function save() {
     if (mode === "custom") {
       if (!baseUrl.trim() || !apiKey.trim() || !model.trim()) {
-        toast.error("URL / API key / model required for custom mode");
+        toast.error(m.settings.requiredFields);
         return;
       }
       const next: VlmSettings = {

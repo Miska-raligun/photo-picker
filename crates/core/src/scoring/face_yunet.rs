@@ -240,21 +240,41 @@ fn preprocess(img: &DynamicImage) -> (Array4<f32>, LetterboxMeta) {
     let pad_x = (INPUT_SIZE - new_w) / 2;
     let pad_y = (INPUT_SIZE - new_h) / 2;
 
+    // Build the BGR letterboxed [1, 3, H, W] tensor in one pass. The active
+    // region is a `new_w × new_h` crop padded by `pad_x`/`pad_y`; outside that
+    // area the buffer stays zeroed (Array4::zeros). For 640×640 inputs this
+    // avoids ~410k per-pixel `get_pixel` + 3D `arr[[..]]` index calls —
+    // measurable on CPU.
     let rgb = resized.to_rgb8();
-    let isize = INPUT_SIZE as usize;
-    let mut arr = Array4::<f32>::zeros((1, 3, isize, isize));
-    for y in 0..new_h {
-        for x in 0..new_w {
-            let p = rgb.get_pixel(x, y);
-            let tx = (x + pad_x) as usize;
-            let ty = (y + pad_y) as usize;
-            // YuNet (per OpenCV's wrapper) consumes BGR pixel values 0-255 as
-            // float without further normalization.
-            arr[[0, 0, ty, tx]] = p.0[2] as f32;
-            arr[[0, 1, ty, tx]] = p.0[1] as f32;
-            arr[[0, 2, ty, tx]] = p.0[0] as f32;
+    let raw = rgb.as_raw(); // [R,G,B, R,G,B, ...]
+    let isize_v = INPUT_SIZE as usize;
+    let plane = isize_v * isize_v;
+    let mut data = vec![0f32; 3 * plane];
+    let new_w_us = new_w as usize;
+    let new_h_us = new_h as usize;
+    let row_stride_src = new_w_us * 3;
+    let pad_x_us = pad_x as usize;
+    let pad_y_us = pad_y as usize;
+    // YuNet (per OpenCV's wrapper) consumes BGR pixel values 0-255 as f32.
+    // CHW layout → plane 0 = B, plane 1 = G, plane 2 = R.
+    for y in 0..new_h_us {
+        let src = &raw[y * row_stride_src..(y + 1) * row_stride_src];
+        let row_off = (pad_y_us + y) * isize_v + pad_x_us;
+        let b_row = &mut data[row_off..row_off + new_w_us];
+        for (i, b) in b_row.iter_mut().enumerate() {
+            *b = src[i * 3 + 2] as f32;
+        }
+        let g_row = &mut data[plane + row_off..plane + row_off + new_w_us];
+        for (i, g) in g_row.iter_mut().enumerate() {
+            *g = src[i * 3 + 1] as f32;
+        }
+        let r_row = &mut data[2 * plane + row_off..2 * plane + row_off + new_w_us];
+        for (i, r) in r_row.iter_mut().enumerate() {
+            *r = src[i * 3] as f32;
         }
     }
+    let arr = Array4::from_shape_vec((1, 3, isize_v, isize_v), data)
+        .expect("shape matches data len");
     (
         arr,
         LetterboxMeta { src_w, src_h, scale, pad_x, pad_y },

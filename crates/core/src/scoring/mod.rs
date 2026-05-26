@@ -159,7 +159,9 @@ fn final_score_from_parts(
     face_bonus: f32,
 ) -> FinalScore {
     let scene = classify_scene(face);
-    let w = FinalWeights::for_scene(scene);
+    // `for_face` matches `for_scene(classify_scene)` outside the 2–5 % soft
+    // band, so the canonical `scene` label stays meaningful for the report.
+    let w = FinalWeights::for_face(face);
     let value = (w.tech * tech
         + w.aesthetic * aesthetic
         + w.composition * composition

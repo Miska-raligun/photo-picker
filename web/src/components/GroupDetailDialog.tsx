@@ -63,7 +63,11 @@ export function GroupDetailDialog({
   const [vlmLoading, setVlmLoading] = useState(false);
   const [vlmResult, setVlmResult] = useState<ExplanationRecord | null>(null);
   const [vlmError, setVlmError] = useState<string | null>(null);
-  const [lightbox, setLightbox] = useState<{ url: string; name: string } | null>(null);
+  const [lightbox, setLightbox] = useState<{
+    url: string;
+    name: string;
+    thumbUrl?: string;
+  } | null>(null);
 
   useEffect(() => {
     if (!open || !runId) return;
@@ -189,6 +193,7 @@ export function GroupDetailDialog({
                       setLightbox({
                         url: api.previewUrl(runId, p.photo_id),
                         name: p.filename ?? p.photo_id,
+                        thumbUrl: api.thumbUrl(runId, p.photo_id),
                       })
                     }
                   />
@@ -296,6 +301,7 @@ export function GroupDetailDialog({
         open={lightbox !== null}
         onOpenChange={(v) => !v && setLightbox(null)}
         previewUrl={lightbox?.url ?? null}
+        thumbUrl={lightbox?.thumbUrl ?? null}
         filename={lightbox?.name ?? null}
       />
     </Dialog>
@@ -467,7 +473,13 @@ function PhotoCard({
         inPlace &&
           "cursor-pointer hover:shadow-md hover:-translate-y-0.5 focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none"
       )}
-      title={inPlace ? (willKeep ? "保留中（点击改为删除）" : "将删除（点击改为保留）") : undefined}
+      title={
+        inPlace
+          ? willKeep
+            ? m.detail.toggleToReject
+            : m.detail.toggleToKeep
+          : undefined
+      }
     >
       <div className="relative aspect-[4/3] bg-muted">
         <img

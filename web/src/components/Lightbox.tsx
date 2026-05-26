@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Dialog as DialogPrimitive } from "radix-ui";
-import { ExternalLink, Loader2, X } from "lucide-react";
+import { ExternalLink, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useM } from "@/lib/i18n";
 
@@ -8,6 +8,10 @@ interface Props {
   open: boolean;
   onOpenChange: (v: boolean) => void;
   previewUrl: string | null;
+  /// Optional low-res image (typically the already-loaded thumbnail) used as
+  /// a blurred backdrop while the full preview decodes — much nicer than a
+  /// blank spinner, especially for RAW where the preview can take seconds.
+  thumbUrl?: string | null;
   filename: string | null;
 }
 
@@ -20,7 +24,7 @@ interface Props {
 ///   - keep our own large transparent-overlay layout
 /// Radix natively handles nested-dialog focus + ESC routing so closing
 /// only dismisses the top-most Dialog (this one).
-export function Lightbox({ open, onOpenChange, previewUrl, filename }: Props) {
+export function Lightbox({ open, onOpenChange, previewUrl, thumbUrl, filename }: Props) {
   const m = useM();
   const [loaded, setLoaded] = useState(false);
   const [errored, setErrored] = useState(false);
@@ -79,17 +83,20 @@ export function Lightbox({ open, onOpenChange, previewUrl, filename }: Props) {
             </div>
           </div>
 
-          {/* Image area */}
-          <div className="max-w-[96vw] max-h-[88vh] flex items-center justify-center pointer-events-none">
-            {!loaded && !errored && previewUrl && (
-              <div className="text-white flex items-center gap-2 pointer-events-auto">
-                <Loader2 className="h-5 w-5 animate-spin" />
-                <span className="text-sm">loading…</span>
-              </div>
+          {/* Image area — blur-up: while the full preview decodes, show the
+              already-loaded thumbnail blurred + scaled as a backdrop. */}
+          <div className="relative max-w-[96vw] max-h-[88vh] flex items-center justify-center pointer-events-none">
+            {!loaded && !errored && thumbUrl && (
+              <img
+                src={thumbUrl}
+                alt=""
+                aria-hidden
+                className="max-w-[96vw] max-h-[88vh] object-contain rounded-md shadow-2xl blur-md scale-105 opacity-90"
+              />
             )}
             {errored && (
               <div className="text-white/80 text-sm font-mono bg-black/40 px-3 py-2 rounded pointer-events-auto">
-                failed to load preview
+                {m.detail.previewFailed ?? "failed to load preview"}
               </div>
             )}
             {previewUrl && (
@@ -99,7 +106,7 @@ export function Lightbox({ open, onOpenChange, previewUrl, filename }: Props) {
                 onLoad={() => setLoaded(true)}
                 onError={() => setErrored(true)}
                 className={`max-w-[96vw] max-h-[88vh] object-contain rounded-md shadow-2xl pointer-events-auto ${
-                  loaded ? "block" : "hidden"
+                  loaded ? "block" : thumbUrl ? "absolute inset-0 m-auto opacity-0" : "hidden"
                 }`}
               />
             )}
