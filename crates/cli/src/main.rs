@@ -66,9 +66,12 @@ struct ScanArgs {
 
     /// Per-composition keep count. Each Stage B composition group emits its top-K2
     /// photos by *final* score (scene-aware blend of tech/aesthetic/composition/face).
-    /// Usually 1 — raise to 2+ if you want bracketed alternates per scene.
-    #[arg(long, default_value_t = 1)]
-    k2: usize,
+    /// Omit (or pass 0) to enable auto mode: every group keeps ≥1 photo, plus any
+    /// additional photos whose scores are within ~5 % of the best (capped at 5/group).
+    /// Useful when shoot quality varies — clear winners stay singletons, near-ties
+    /// keep both.
+    #[arg(long)]
+    k2: Option<usize>,
 
     /// How to materialize picks into <output>/picked:\n  \
     /// hardlink — zero disk cost when source + output are on the same filesystem\n  \
@@ -245,7 +248,11 @@ fn run_scan(args: ScanArgs) -> Result<()> {
             chain_margin: StageBParams::default().chain_margin,
         },
         k1: args.k1,
-        k2: args.k2,
+        k2: match args.k2 {
+            // `--k2 0` is shorthand for "auto" (matches the Option=None default).
+            Some(0) | None => None,
+            Some(k) => Some(k),
+        },
         tech_weights: TechWeights::default(),
         link_mode: args.link.into(),
         thumbnail: ThumbnailSpec::default(),

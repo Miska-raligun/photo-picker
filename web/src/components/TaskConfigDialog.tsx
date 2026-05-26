@@ -46,7 +46,9 @@ export function TaskConfigDialog({
 }: Props) {
   const m = useM();
   const [k1, setK1] = useState(3);
-  const [k2, setK2] = useState(1);
+  // K2 is optional: empty string → auto (per-group keep count driven by
+  // score gaps server-side), positive integer → fixed K2.
+  const [k2, setK2] = useState<string>("");
   const [timeK, setTimeK] = useState(3.0);
   const [minDt, setMinDt] = useState(0.3);
   const [maxDt, setMaxDt] = useState(30.0);
@@ -66,10 +68,18 @@ export function TaskConfigDialog({
   async function start() {
     setSubmitting(true);
     try {
+      // Empty / "0" / NaN → omit k2 entirely so the server's serde default
+      // (None) triggers auto-K2 mode. Anything else → positive integer.
+      const k2Trim = k2.trim();
+      const k2Parsed = k2Trim === "" ? undefined : parseInt(k2Trim, 10);
+      const k2Final =
+        k2Parsed === undefined || Number.isNaN(k2Parsed) || k2Parsed <= 0
+          ? undefined
+          : k2Parsed;
       const req = {
         output: inPlace ? source : output,
         k1,
-        k2,
+        ...(k2Final !== undefined ? { k2: k2Final } : {}),
         time_k: timeK,
         min_dt: minDt,
         max_dt: maxDt,
@@ -161,7 +171,8 @@ export function TaskConfigDialog({
                 min={1}
                 max={10}
                 value={k2}
-                onChange={(e) => setK2(parseInt(e.target.value) || 1)}
+                placeholder={m.scanForm.k2Auto}
+                onChange={(e) => setK2(e.target.value)}
                 className="text-sm w-24"
               />
             </FieldHelp>

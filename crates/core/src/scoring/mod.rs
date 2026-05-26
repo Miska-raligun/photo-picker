@@ -357,6 +357,26 @@ pub struct CompositionPick {
     pub rejected: Vec<(PhotoId, FinalScore)>,
 }
 
+/// K2 selection policy. `Fixed(k)` keeps a constant K2 across every
+/// composition group. `Auto` adapts per-group: keep the top photo, plus
+/// any subsequent photo whose score is within `AUTO_K2_TOP_RATIO` of the
+/// best AND whose drop from the previous rank is within `AUTO_K2_STEP_DROP`
+/// (relative to the top score). Capped at `AUTO_K2_MAX`.
+#[derive(Debug, Clone, Copy)]
+pub enum K2Policy {
+    Fixed(usize),
+    Auto,
+}
+
+/// Within `AUTO_K2_TOP_RATIO` of the top score → still a contender.
+const AUTO_K2_TOP_RATIO: f32 = 0.92;
+/// Successive-rank score drop (relative to the top score) above which the
+/// "next" photo is treated as clearly worse and we stop including more.
+const AUTO_K2_STEP_DROP: f32 = 0.05;
+/// Hard cap to avoid runaway in pathological groups where every photo
+/// scores ~identically.
+const AUTO_K2_MAX: usize = 5;
+
 /// For each composition group, compute the final scene-aware score and pick K2.
 ///
 /// Sharpness (global and per-face) is re-normalized WITHIN the composition group
@@ -365,7 +385,7 @@ pub struct CompositionPick {
 pub fn select_top_k_per_composition(
     composition_groups: &[CompositionGroup],
     features: &HashMap<PhotoId, PhotoFeatures>,
-    k2: usize,
+    policy: K2Policy,
     weights: &TechWeights,
 ) -> Vec<CompositionPick> {
     composition_groups
@@ -376,7 +396,10 @@ pub fn select_top_k_per_composition(
             let mut ranked: Vec<(PhotoId, FinalScore)> =
                 members.iter().map(|(id, ..)| (*id, scored[id].1)).collect();
             ranked.sort_by(|a, b| b.1.value.partial_cmp(&a.1.value).unwrap_or(Ordering::Equal));
-            let k = k2.min(ranked.len());
+            let k = match policy {
+                K2Policy::Fixed(k2) => k2.min(ranked.len()),
+                K2Policy::Auto => auto_k(&ranked),
+            };
             let rejected = ranked.split_off(k);
             CompositionPick {
                 group: cg.clone(),
@@ -385,6 +408,30 @@ pub fn select_top_k_per_composition(
             }
         })
         .collect()
+}
+
+/// Auto-K policy: always keep ≥1 photo. Then walk down the sorted list,
+/// keeping each photo while it's within `AUTO_K2_TOP_RATIO` of the top AND
+/// the per-rank drop from its predecessor stays within `AUTO_K2_STEP_DROP`
+/// of the top. Capped at `AUTO_K2_MAX`.
+fn auto_k(ranked: &[(PhotoId, FinalScore)]) -> usize {
+    if ranked.is_empty() {
+        return 0;
+    }
+    let top = ranked[0].1.value.max(1e-6);
+    let mut k = 1usize;
+    while k < ranked.len().min(AUTO_K2_MAX) {
+        let cur = ranked[k].1.value;
+        let prev = ranked[k - 1].1.value;
+        let close_to_top = cur / top >= AUTO_K2_TOP_RATIO;
+        let small_step = (prev - cur) / top <= AUTO_K2_STEP_DROP;
+        if close_to_top && small_step {
+            k += 1;
+        } else {
+            break;
+        }
+    }
+    k
 }
 
 /// For each burst, rank photos by the full scene-aware final score (sharpness
@@ -552,5 +599,52 @@ mod tests {
         for w in t.windows(2) {
             assert!(w[1] >= w[0]);
         }
+    }
+
+    fn fake_pair(value: f32) -> (PhotoId, FinalScore) {
+        (
+            PhotoId::new(),
+            FinalScore {
+                scene: Scene::Mixed,
+                tech: 0.5,
+                aesthetic: 0.5,
+                composition: 0.5,
+                face_bonus: 0.0,
+                value,
+            },
+        )
+    }
+
+    #[test]
+    fn auto_k_keeps_one_when_clear_winner() {
+        let ranked = vec![fake_pair(0.9), fake_pair(0.5), fake_pair(0.4)];
+        assert_eq!(auto_k(&ranked), 1);
+    }
+
+    #[test]
+    fn auto_k_keeps_near_ties() {
+        // 0.90, 0.88, 0.86, 0.40 — first three are within the 92% ratio AND
+        // step drops are ≤5% of the top; the 0.40 outlier breaks both
+        // conditions, so we stop at 3.
+        let ranked = vec![fake_pair(0.90), fake_pair(0.88), fake_pair(0.86), fake_pair(0.40)];
+        assert_eq!(auto_k(&ranked), 3);
+    }
+
+    #[test]
+    fn auto_k_caps_at_max() {
+        // 10 identical scores → cap at AUTO_K2_MAX.
+        let ranked: Vec<_> = (0..10).map(|_| fake_pair(0.85)).collect();
+        assert_eq!(auto_k(&ranked), AUTO_K2_MAX);
+    }
+
+    #[test]
+    fn auto_k_handles_empty() {
+        assert_eq!(auto_k(&[]), 0);
+    }
+
+    #[test]
+    fn auto_k_singleton_keeps_one() {
+        let ranked = vec![fake_pair(0.6)];
+        assert_eq!(auto_k(&ranked), 1);
     }
 }

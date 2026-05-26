@@ -47,9 +47,10 @@ const enMessages = {
       k1Desc:
         "From each burst (Stage A: nearly-identical photos shot in quick succession), keep the top K1 by technical quality.",
 
-      k2Label: "K2 — keep per composition",
+      k2Label: "K2 — keep per composition (optional)",
       k2Desc:
-        "From each composition group (Stage B: same framing / subject across different bursts), keep the top K2 by final score. Usually 1.",
+        "From each composition group (Stage B: same framing / subject across different bursts), keep the top K2 by final score. Leave empty for auto mode — each group keeps ≥1 photo, plus any extras whose score is within ~5 % of the best (capped at 5/group). Clear winners stay singletons; near-ties keep both.",
+      k2Auto: "auto",
 
       timeKLabel: "Burst time window (× median)",
       timeKDesc:
@@ -268,8 +269,9 @@ export const messages: Record<Lang, Messages> = {
       k1Label: "K1：每组连拍保留张数",
       k1Desc: "Stage A 把短时间内拍的几乎相同的照片归为一组连拍，从每组里按技术质量保留最好的 K1 张。",
 
-      k2Label: "K2：每个构图保留张数",
-      k2Desc: "Stage B 把构图相似的照片（同场景、不同次按快门）再归一组，按综合评分保留最好的 K2 张。通常 1。",
+      k2Label: "K2：每个构图保留张数（可选）",
+      k2Desc: "Stage B 把构图相似的照片（同场景、不同次按快门）再归一组，按综合评分保留最好的 K2 张。留空 = 自动模式：每组至少 1 张，分数接近最高（5% 以内）的额外保留，每组最多 5 张。一张明显好就只留一张；多张接近就都留。",
+      k2Auto: "自动",
 
       timeKLabel: "连拍时间窗口（× 中位间隔）",
       timeKDesc: "判定\"同一组连拍\"的时间跨度，相对于典型拍照间隔的倍数。默认 3 倍较稳。值越大，更多照片被算作一组连拍。",

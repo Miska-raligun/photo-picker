@@ -16,7 +16,8 @@ use crate::output::{
     DEFAULT_THUMB_LONG_EDGE, DEFAULT_THUMB_QUALITY,
 };
 use crate::scoring::{
-    select_top_k_per_composition, select_top_k_per_group, CompositionPick, SelectedGroup,
+    select_top_k_per_composition, select_top_k_per_group, CompositionPick, K2Policy,
+    SelectedGroup,
     TechWeights,
 };
 use rayon::prelude::*;
@@ -68,7 +69,10 @@ pub struct PipelineConfig {
     pub stage_a: StageAParams,
     pub stage_b: StageBParams,
     pub k1: usize,
-    pub k2: usize,
+    /// `None` = auto: per-group keep count driven by score-gap heuristics
+    /// (always ≥1; clusters of near-tied photos keep more; clear winners
+    /// keep just one; capped at 5 per group).
+    pub k2: Option<usize>,
     pub tech_weights: TechWeights,
     pub link_mode: LinkMode,
     pub thumbnail: ThumbnailSpec,
@@ -370,10 +374,14 @@ impl Pipeline {
         // Sharpness is re-normalized within each composition group here.
         let composition_picks: Vec<CompositionPick> = if !stage_b_groups.is_empty() {
             progress.on_stage(Stage::FinalSelect, 0);
+            let policy = match self.cfg.k2 {
+                Some(k) => K2Policy::Fixed(k),
+                None => K2Policy::Auto,
+            };
             let cp = select_top_k_per_composition(
                 &stage_b_groups,
                 &features,
-                self.cfg.k2,
+                policy,
                 &self.cfg.tech_weights,
             );
             let kept_total: usize = cp.iter().map(|p| p.kept.len()).sum();

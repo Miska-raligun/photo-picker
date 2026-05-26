@@ -33,8 +33,10 @@ pub struct ScanRequest {
     pub output: PathBuf,
     #[serde(default = "default_k1")]
     pub k1: usize,
-    #[serde(default = "default_k2")]
-    pub k2: usize,
+    /// `None` (or `0`) = auto mode (per-group keep count driven by score gaps).
+    /// Positive integer = fixed K2 for every composition group.
+    #[serde(default)]
+    pub k2: Option<usize>,
     #[serde(default = "default_time_k")]
     pub time_k: f32,
     #[serde(default = "default_min_dt")]
@@ -72,7 +74,6 @@ pub struct ScanRequest {
 }
 
 fn default_k1() -> usize { 3 }
-fn default_k2() -> usize { 1 }
 fn default_time_k() -> f32 { 3.0 }
 fn default_min_dt() -> f32 { 0.3 }
 fn default_max_dt() -> f32 { 30.0 }
@@ -184,7 +185,10 @@ pub async fn scan(
                 chain_margin: StageBParams::default().chain_margin,
             },
             k1: req_for_task.k1,
-            k2: req_for_task.k2,
+            k2: match req_for_task.k2 {
+                Some(0) | None => None,
+                Some(k) => Some(k),
+            },
             tech_weights: TechWeights::default(),
             link_mode: parse_link_mode(&req_for_task.link_mode),
             thumbnail: ThumbnailSpec {
