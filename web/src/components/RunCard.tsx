@@ -75,26 +75,30 @@ export function RunCard({ run, progress, onOpenDetail }: Props) {
       </CardHeader>
 
       <CardContent className="space-y-3">
-        {state === "running" && progress && (
+        {state === "running" && (
           <div className="space-y-1.5">
             <div className="flex items-center justify-between text-xs text-muted-foreground">
-              <span className="font-mono">{progress.stage}</span>
-              <span className="tabular-nums">
-                {progress.total > 0
-                  ? `${progress.done} / ${progress.total}`
-                  : `${progress.done}`}
-              </span>
+              <span className="font-mono">{progress?.stage ?? m.runCard.starting}</span>
+              {progress && progress.total > 0 && (
+                <span className="tabular-nums">
+                  {progress.done} / {progress.total}
+                </span>
+              )}
             </div>
             <div className="h-1.5 rounded bg-muted overflow-hidden">
-              <div
-                className="h-full bg-primary transition-[width] duration-200"
-                style={{
-                  width:
-                    progress.total > 0
-                      ? `${Math.min(100, (progress.done / progress.total) * 100)}%`
-                      : "20%",
-                }}
-              />
+              {progress && progress.total > 0 ? (
+                <div
+                  className="h-full bg-primary transition-[width] duration-200"
+                  style={{
+                    width: `${Math.min(100, (progress.done / progress.total) * 100)}%`,
+                  }}
+                />
+              ) : (
+                // Indeterminate bar for stages without per-item progress
+                // (Cluster/Score/StageB/FinalSelect) and for the brief
+                // window before the first SSE event lands.
+                <div className="h-full w-1/3 bg-primary animate-[indeterminate_1.2s_ease-in-out_infinite] rounded" />
+              )}
             </div>
           </div>
         )}

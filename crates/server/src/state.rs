@@ -148,29 +148,96 @@ fn stage_name(s: Stage) -> &'static str {
     }
 }
 
-/// `ProgressSink` implementation that broadcasts events to all SSE
-/// subscribers of a given run. Sync (called from the pipeline's rayon
-/// workers); `broadcast::Sender::send` is non-blocking and tolerates the
-/// no-subscribers case (returns `Err` which we discard).
-pub struct ChannelProgressSink {
+/// Broadcast channel + replay log for a single run. New SSE subscribers
+/// receive the full history first (so they don't miss events fired between
+/// the `POST /api/scan` returning and the client's `EventSource` connecting),
+/// then live updates. For cache-hit scans that finish in <500ms this is the
+/// difference between "saw 0 events" and "saw the whole timeline".
+#[derive(Clone)]
+pub struct ProgressStream {
     pub tx: broadcast::Sender<ProgressEvent>,
+    /// Bounded history. `Tick` events are coalesced (last tick per stage)
+    /// so a long Features stage with 1000 photos doesn't blow this up.
+    pub history: Arc<SyncMutex<ProgressHistory>>,
+}
+
+#[derive(Default)]
+pub struct ProgressHistory {
+    pub stages: Vec<ProgressEvent>,
+    /// Most-recent Tick per stage, keyed by stage name. Replayed after the
+    /// stage's `Stage` event so a late-joiner sees current progress without
+    /// every intermediate tick.
+    pub last_tick: std::collections::HashMap<String, ProgressEvent>,
+    pub done: Option<ProgressEvent>,
+}
+
+impl ProgressStream {
+    pub fn new() -> Self {
+        let (tx, _) = broadcast::channel(256);
+        Self {
+            tx,
+            history: Arc::new(SyncMutex::new(ProgressHistory::default())),
+        }
+    }
+
+    pub fn record(&self, ev: ProgressEvent) {
+        if let Ok(mut h) = self.history.lock() {
+            match &ev {
+                ProgressEvent::Stage { .. } | ProgressEvent::Finish { .. } => {
+                    h.stages.push(ev.clone());
+                }
+                ProgressEvent::Tick { stage, .. } => {
+                    h.last_tick.insert(stage.clone(), ev.clone());
+                }
+                ProgressEvent::Done { .. } => {
+                    h.done = Some(ev.clone());
+                }
+            }
+        }
+        let _ = self.tx.send(ev);
+    }
+
+    /// Build a snapshot vec for a late subscriber: every Stage/Finish in
+    /// order, plus each stage's most recent Tick, plus terminal Done if any.
+    pub fn snapshot(&self) -> Vec<ProgressEvent> {
+        let Ok(h) = self.history.lock() else { return vec![] };
+        let mut out: Vec<ProgressEvent> = Vec::with_capacity(h.stages.len() + h.last_tick.len() + 1);
+        for ev in &h.stages {
+            out.push(ev.clone());
+            if let ProgressEvent::Stage { stage, .. } = ev {
+                if let Some(t) = h.last_tick.get(stage) {
+                    out.push(t.clone());
+                }
+            }
+        }
+        if let Some(d) = &h.done {
+            out.push(d.clone());
+        }
+        out
+    }
+}
+
+/// `ProgressSink` implementation that records events into a `ProgressStream`
+/// (history + broadcast). Sync (called from the pipeline's rayon workers).
+pub struct ChannelProgressSink {
+    pub stream: ProgressStream,
 }
 
 impl ProgressSink for ChannelProgressSink {
     fn on_stage(&self, stage: Stage, total: u64) {
-        let _ = self.tx.send(ProgressEvent::Stage {
+        self.stream.record(ProgressEvent::Stage {
             stage: stage_name(stage).into(),
             total,
         });
     }
     fn on_tick(&self, stage: Stage, done: u64) {
-        let _ = self.tx.send(ProgressEvent::Tick {
+        self.stream.record(ProgressEvent::Tick {
             stage: stage_name(stage).into(),
             done,
         });
     }
     fn on_finish(&self, stage: Stage) {
-        let _ = self.tx.send(ProgressEvent::Finish {
+        self.stream.record(ProgressEvent::Finish {
             stage: stage_name(stage).into(),
         });
     }
@@ -179,10 +246,9 @@ impl ProgressSink for ChannelProgressSink {
 #[derive(Clone)]
 pub struct AppState {
     pub runs: Arc<Mutex<HashMap<String, RunRecord>>>,
-    /// One broadcast channel per active run. SSE subscribers receive every
-    /// progress event from start to terminal `Done`. Sender is dropped when
-    /// the pipeline finishes, which closes the stream client-side.
-    pub progress_streams: Arc<Mutex<HashMap<String, broadcast::Sender<ProgressEvent>>>>,
+    /// One stream per run. Carries both the live broadcast channel and a
+    /// replay buffer so late SSE subscribers see the timeline from t=0.
+    pub progress_streams: Arc<Mutex<HashMap<String, ProgressStream>>>,
     /// Insertion order — first element is the oldest run. Used to evict the
     /// least-recently-inserted completed run when `runs` grows past
     /// `max_runs`. Insert order is "good enough" given runs are append-only

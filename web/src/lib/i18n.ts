@@ -147,6 +147,7 @@ const enMessages = {
       viewResults: "View results",
       taskDetails: "Task details",
       emptyGroups: "No composition groups for this run.",
+      starting: "starting…",
     },
     groupCard: {
       keptSuffix: "kept",
@@ -352,6 +353,7 @@ export const messages: Record<Lang, Messages> = {
       viewResults: "查看结果",
       taskDetails: "任务结果",
       emptyGroups: "本任务没有产生构图组。",
+      starting: "启动中…",
     },
     groupCard: {
       keptSuffix: "已选",

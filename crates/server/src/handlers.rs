@@ -140,15 +140,15 @@ pub async fn scan(
     };
     state.insert_run(record).await;
 
-    // Create a broadcast channel so SSE subscribers receive ProgressSink
-    // events; sender lives on the spawned task and is dropped when the
-    // pipeline finishes (which closes the SSE stream client-side).
-    let (progress_tx, _) = tokio::sync::broadcast::channel::<crate::state::ProgressEvent>(128);
+    // Create a progress stream (broadcast + replay buffer). Late SSE
+    // subscribers replay the buffer before receiving live updates so
+    // cache-hit / fast scans aren't silent.
+    let progress_stream = crate::state::ProgressStream::new();
     state
         .progress_streams
         .lock()
         .await
-        .insert(run_id.clone(), progress_tx.clone());
+        .insert(run_id.clone(), progress_stream.clone());
 
     let runs = state.runs.clone();
     let semaphore = state.scan_semaphore.clone();
@@ -163,7 +163,7 @@ pub async fn scan(
         // requests. UI shows the run as `running` for the entire wait.
         let _permit = semaphore.acquire_owned().await.expect("semaphore closed");
         let runs_inner = runs.clone();
-        let progress_tx_inner = progress_tx.clone();
+        let progress_stream_inner = progress_stream.clone();
         let run_id_for_blocking = run_id_for_task.clone();
         let _ = tokio::task::spawn_blocking(move || {
         let cfg = PipelineConfig {
@@ -199,10 +199,12 @@ pub async fn scan(
             thumb_cache_dir: Some(req_for_task.output.join(".thumbs")),
         };
         let pipeline = Pipeline::new(cfg);
-        let sink = crate::state::ChannelProgressSink { tx: progress_tx_inner.clone() };
+        let sink = crate::state::ChannelProgressSink {
+            stream: progress_stream_inner.clone(),
+        };
         let result = pipeline.run(&sink);
         // Send a terminal Done so SSE clients know to stop subscribing.
-        let _ = progress_tx_inner.send(crate::state::ProgressEvent::Done {
+        progress_stream_inner.record(crate::state::ProgressEvent::Done {
             ok: result.is_ok(),
         });
         let mut guard = runs_inner.blocking_lock();
@@ -221,19 +223,24 @@ pub async fn scan(
             }
         }
         }).await;
-        // Close the broadcast channel by removing it from the registry; any
-        // remaining subscribers see the stream end.
-        progress_streams.lock().await.remove(&run_id_for_task);
+        // Keep the ProgressStream around for a short tail so late SSE
+        // subscribers (UI tab focus, slow EventSource) can still replay the
+        // terminal Done. Drop after a few seconds.
+        let progress_streams2 = progress_streams.clone();
+        let run_id_evict = run_id_for_task.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+            progress_streams2.lock().await.remove(&run_id_evict);
+        });
         drop(_permit);
     });
 
     Ok(Json(serde_json::json!({ "run_id": run_id })))
 }
 
-/// SSE stream of `ProgressEvent`s for a single run. Subscribers join the
-/// existing broadcast channel; new subscribers don't replay past events
-/// (only see new ones), so the UI should also poll `/api/runs/:id` for the
-/// snapshot at subscription time.
+/// SSE stream of `ProgressEvent`s for a single run. New subscribers receive
+/// the full history first (so cache-hit / fast scans that fired all their
+/// events before the client subscribed aren't silent), then live updates.
 pub async fn run_events(
     State(state): State<AppState>,
     Path(run_id): Path<String>,
@@ -243,41 +250,53 @@ pub async fn run_events(
     use std::convert::Infallible;
     use tokio_stream::wrappers::BroadcastStream;
 
-    let rx = {
+    // Subscribe BEFORE reading the snapshot — that way any event that fires
+    // between snapshot read and broadcast subscription is delivered live
+    // (with at most a harmless duplicate vs. the snapshot, which the UI
+    // handles idempotently).
+    let (snapshot, rx) = {
         let guard = state.progress_streams.lock().await;
         match guard.get(&run_id) {
-            Some(tx) => Some(tx.subscribe()),
-            None => None,
+            Some(stream) => (stream.snapshot(), Some(stream.tx.subscribe())),
+            None => (vec![], None),
         }
     };
 
-    // No stream registered → the run already finished (or never existed).
-    // Emit a single Done so the client knows to stop trying.
-    if rx.is_none() {
-        let one = futures_util::stream::once(async {
-            Ok::<_, Infallible>(
-                Event::default()
-                    .event("progress")
-                    .json_data(crate::state::ProgressEvent::Done { ok: true })
-                    .unwrap(),
-            )
+    let to_event = |ev: crate::state::ProgressEvent| {
+        Ok::<_, Infallible>(
+            Event::default()
+                .event("progress")
+                .json_data(ev)
+                .unwrap_or_else(|_| Event::default().data("bad-event")),
+        )
+    };
+
+    // History first (replay). If the run already finished and the stream
+    // was evicted, fall back to a synthesized Done.
+    let history_stream = if !snapshot.is_empty() {
+        futures_util::stream::iter(snapshot.into_iter().map(to_event)).boxed()
+    } else if rx.is_none() {
+        futures_util::stream::iter(std::iter::once(to_event(
+            crate::state::ProgressEvent::Done { ok: true },
+        )))
+        .boxed()
+    } else {
+        futures_util::stream::iter(std::iter::empty()).boxed()
+    };
+
+    let combined = if let Some(rx) = rx {
+        let live = BroadcastStream::new(rx).filter_map(move |msg| async move {
+            match msg {
+                Ok(ev) => Some(to_event(ev)),
+                Err(_) => None, // lagged / closed
+            }
         });
-        return Sse::new(one).keep_alive(KeepAlive::default()).into_response();
-    }
+        history_stream.chain(live).boxed()
+    } else {
+        history_stream
+    };
 
-    let stream = BroadcastStream::new(rx.unwrap()).filter_map(|msg| async move {
-        match msg {
-            Ok(ev) => Some(Ok::<_, Infallible>(
-                Event::default()
-                    .event("progress")
-                    .json_data(ev)
-                    .unwrap_or_else(|_| Event::default().data("bad-event")),
-            )),
-            Err(_) => None, // lagged / channel closed — drop silently
-        }
-    });
-
-    Sse::new(stream).keep_alive(KeepAlive::default()).into_response()
+    Sse::new(combined).keep_alive(KeepAlive::default()).into_response()
 }
 
 #[derive(Debug, Deserialize)]

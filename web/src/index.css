@@ -118,3 +118,12 @@
     -webkit-font-smoothing: antialiased;
   }
 }
+
+/* Indeterminate progress bar: a 1/3-wide chunk sweeps left→right→back.
+   Used by RunCard while a scan is between stage events or in a stage that
+   has no per-item count (Cluster/Score/StageB/FinalSelect). */
+@keyframes indeterminate {
+  0%   { transform: translateX(-100%); }
+  50%  { transform: translateX(150%); }
+  100% { transform: translateX(-100%); }
+}
