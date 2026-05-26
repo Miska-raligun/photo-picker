@@ -340,7 +340,7 @@ function ScoreBreakdown({ fs }: { fs: NonNullable<PhotoView["final_score"]> }) {
       <div className="flex items-baseline justify-between text-xs">
         <span className="text-muted-foreground font-mono">{m.detail.scoreFinal}</span>
         <span className="text-primary font-mono font-semibold tabular-nums">
-          {fs.value.toFixed(2)}
+          {Math.round(fs.value * 100)}
         </span>
       </div>
       <div className="space-y-1">
@@ -396,7 +396,7 @@ function ScoreBar({
           disabled ? "text-muted-foreground/50" : ""
         }`}
       >
-        {value.toFixed(2)}
+        {Math.round(value * 100)}
       </span>
     </div>
   );
