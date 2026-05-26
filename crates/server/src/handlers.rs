@@ -196,6 +196,7 @@ pub async fn scan(
             materialize_picks: !req_for_task.in_place,
             execution_provider: parse_provider(&req_for_task.execution_provider),
             adaptive_thresholds: req_for_task.adaptive_thresholds,
+            thumb_cache_dir: Some(req_for_task.output.join(".thumbs")),
         };
         let pipeline = Pipeline::new(cfg);
         let sink = crate::state::ChannelProgressSink { tx: progress_tx_inner.clone() };
@@ -468,16 +469,34 @@ async fn serve_jpeg(
         return jpeg_response(bytes);
     }
 
-    let photo_ref = {
+    let (photo_ref, output_dir) = {
         let guard = state.runs.lock().await;
         let Some(rec) = guard.get(&run_id) else {
             return (StatusCode::NOT_FOUND, "run not found").into_response();
         };
-        match rec.photos.get(&pid) {
-            Some(p) => p.clone(),
-            None => return (StatusCode::NOT_FOUND, "photo not in run").into_response(),
-        }
+        let Some(p) = rec.photos.get(&pid) else {
+            return (StatusCode::NOT_FOUND, "photo not in run").into_response();
+        };
+        (p.clone(), rec.output.clone())
     };
+
+    // Disk thumb cache (populated by the pipeline during scan). Hits skip the
+    // RAW byte-scan entirely — only matters when `long_edge` matches the
+    // cache's spec; otherwise fall through to decode-and-encode.
+    let sha = photo_ref.sha256_short;
+    let thumb_cache_disk = photo_pick_core::output::ThumbDiskCache::new(
+        output_dir.join(".thumbs"),
+        photo_pick_core::output::DEFAULT_THUMB_LONG_EDGE,
+        photo_pick_core::output::DEFAULT_THUMB_QUALITY,
+    );
+    let cached_long_edge = thumb_cache_disk.spec().long_edge;
+    let cached_quality = thumb_cache_disk.quality();
+    if long_edge <= cached_long_edge && quality <= cached_quality {
+        if let Some(bytes) = thumb_cache_disk.read(&sha) {
+            state.thumb_cache.put(key.clone(), bytes.clone());
+            return jpeg_response(bytes);
+        }
+    }
 
     let result = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, String> {
         let img = decode_thumbnail_for(&photo_ref, ThumbnailSpec { long_edge })

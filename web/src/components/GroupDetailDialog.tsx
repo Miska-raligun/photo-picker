@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import { Loader2, Maximize2, Settings as SettingsIcon, Sparkles } from "lucide-react";
 import { Lightbox } from "./Lightbox";
 import {
@@ -402,17 +402,7 @@ function ScoreBar({
   );
 }
 
-function PhotoCard({
-  runId,
-  photo,
-  kept,
-  overridden,
-  inPlace,
-  aiRank,
-  aiReason,
-  onToggleOverride,
-  onViewOriginal,
-}: {
+interface PhotoCardProps {
   runId: string;
   photo: PhotoView;
   /// Algorithm's verdict — true if this photo was in `pick.kept`.
@@ -426,7 +416,22 @@ function PhotoCard({
   aiReason?: string;
   onToggleOverride: () => void;
   onViewOriginal: () => void;
-}) {
+}
+
+/// Memoized below; rendered in a grid up to ~K1·burst-size per composition
+/// group (single-digit to mid-double-digits in practice). Memo avoids
+/// re-render churn when an unrelated VLM annotation lands on a sibling card.
+function PhotoCardImpl({
+  runId,
+  photo,
+  kept,
+  overridden,
+  inPlace,
+  aiRank,
+  aiReason,
+  onToggleOverride,
+  onViewOriginal,
+}: PhotoCardProps) {
   const m = useM();
   const fs = photo.final_score;
 
@@ -537,3 +542,5 @@ function PhotoCard({
     </div>
   );
 }
+
+const PhotoCard = memo(PhotoCardImpl);

@@ -1,10 +1,12 @@
 mod html;
 mod plan;
 mod report;
+mod thumb_cache;
 
 pub use html::write_html_report;
 pub use plan::{plan_output, OutputPlan};
 pub use report::write_json_report;
+pub use thumb_cache::{ThumbDiskCache, DEFAULT_THUMB_LONG_EDGE, DEFAULT_THUMB_QUALITY};
 
 use crate::error::{Error, Result};
 use crate::ingest::{PhotoId, PhotoRef};

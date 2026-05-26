@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { cn } from "@/lib/utils";
 import type { CompositionPickView } from "@/lib/types";
 import { api } from "@/lib/api";
@@ -10,7 +11,7 @@ interface Props {
   onClick: () => void;
 }
 
-export function GroupCard({ runId, pick, overrides, onClick }: Props) {
+function GroupCardImpl({ runId, pick, overrides, onClick }: Props) {
   const m = useM();
   const total = pick.kept.length + pick.rejected.length;
   const rep = pick.kept[0] || pick.rejected[0];
@@ -72,3 +73,9 @@ export function GroupCard({ runId, pick, overrides, onClick }: Props) {
     </button>
   );
 }
+
+/// Memoized: this card lives in a virtualized strip; without memo every
+/// unrelated parent re-render (e.g. an override flip on a different group)
+/// re-renders all visible cards. Cheap equality on `pick` (stable ref from
+/// the report) + `overrides` (a Set — stable until `setOverrides` runs).
+export const GroupCard = memo(GroupCardImpl);

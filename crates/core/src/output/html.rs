@@ -3,6 +3,7 @@
 //! The report is one file: no relative-path references, no JS bundles. Open it
 //! anywhere and you see the same thing the pipeline produced.
 
+use super::ThumbDiskCache;
 use crate::error::{Error, Result};
 use crate::ingest::{decode_thumbnail_for, PhotoId, PhotoRef, ThumbnailSpec};
 use crate::scoring::{CompositionPick, FinalScore, Scene, SelectedGroup, TechScore};
@@ -26,9 +27,10 @@ pub fn write_html_report(
     photos: &HashMap<PhotoId, PhotoRef>,
     stage_a_picks: &[SelectedGroup],
     composition_picks: &[CompositionPick],
+    thumb_cache: Option<&ThumbDiskCache>,
 ) -> Result<()> {
     // Build thumbnail data URLs in parallel — JPEG decoding is the bottleneck.
-    let thumbs = build_thumbnail_map(photos);
+    let thumbs = build_thumbnail_map(photos, thumb_cache);
 
     let mut html = String::with_capacity(64 * 1024);
     html.push_str(&format!(
@@ -64,18 +66,33 @@ pub fn write_html_report(
     Ok(())
 }
 
-fn build_thumbnail_map(photos: &HashMap<PhotoId, PhotoRef>) -> HashMap<PhotoId, String> {
+fn build_thumbnail_map(
+    photos: &HashMap<PhotoId, PhotoRef>,
+    cache: Option<&ThumbDiskCache>,
+) -> HashMap<PhotoId, String> {
     let entries: Vec<(PhotoId, String)> = photos
         .par_iter()
         .map(|(pid, p)| {
-            let url = thumbnail_data_url(p).unwrap_or_else(|| String::from("data:,"));
+            // Prefer the disk cache: the pipeline populated it during feature
+            // extraction with the already-decoded thumbnail, so we skip the
+            // RAW byte-scan + decode on every photo.
+            let bytes = cache
+                .and_then(|c| c.read(&p.sha256_short))
+                .or_else(|| thumbnail_jpeg_bytes(p));
+            let url = match bytes {
+                Some(b) => {
+                    let b64 = base64::engine::general_purpose::STANDARD.encode(&b);
+                    format!("data:image/jpeg;base64,{b64}")
+                }
+                None => String::from("data:,"),
+            };
             (*pid, url)
         })
         .collect();
     entries.into_iter().collect()
 }
 
-fn thumbnail_data_url(p: &PhotoRef) -> Option<String> {
+fn thumbnail_jpeg_bytes(p: &PhotoRef) -> Option<Vec<u8>> {
     let spec = ThumbnailSpec { long_edge: THUMB_LONG_EDGE };
     let img = decode_thumbnail_for(p, spec).ok()?;
     let rgb = img.to_rgb8();
@@ -84,8 +101,7 @@ fn thumbnail_data_url(p: &PhotoRef) -> Option<String> {
     encoder
         .write_image(&rgb, rgb.width(), rgb.height(), image::ExtendedColorType::Rgb8)
         .ok()?;
-    let b64 = base64::engine::general_purpose::STANDARD.encode(&buf);
-    Some(format!("data:image/jpeg;base64,{b64}"))
+    Some(buf)
 }
 
 fn write_header(

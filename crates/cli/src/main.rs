@@ -254,6 +254,7 @@ fn run_scan(args: ScanArgs) -> Result<()> {
         enable_face: !args.no_face,
         materialize_picks: true,
         adaptive_thresholds: true,
+        thumb_cache_dir: Some(args.output.join(".thumbs")),
         execution_provider: ExecutionProvider::Cpu,
     };
 

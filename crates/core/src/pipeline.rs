@@ -11,7 +11,10 @@ use crate::models::ExecutionProvider;
 use crate::models::ClipEncoder;
 #[cfg(feature = "onnx")]
 use crate::scoring::YunetFaceDetector;
-use crate::output::{materialize, plan_output, write_html_report, write_json_report};
+use crate::output::{
+    materialize, plan_output, write_html_report, write_json_report, ThumbDiskCache,
+    DEFAULT_THUMB_LONG_EDGE, DEFAULT_THUMB_QUALITY,
+};
 use crate::scoring::{
     select_top_k_per_composition, select_top_k_per_group, CompositionPick, SelectedGroup,
     TechWeights,
@@ -83,6 +86,12 @@ pub struct PipelineConfig {
     /// landscape-only shoots loosen (allow more burst / composition
     /// consolidation). Magnitude capped at ±0.025.
     pub adaptive_thresholds: bool,
+    /// Directory where the pipeline persists JPEG thumbnails (one file per
+    /// photo, keyed by sha256_short) during feature extraction. Both the
+    /// HTML report and the server's thumbnail endpoints read from this dir
+    /// to avoid re-decoding originals (RAW byte-scan is the dominant cost).
+    /// `None` disables the cache. Default in callers: `<output>/.thumbs`.
+    pub thumb_cache_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -230,6 +239,13 @@ impl Pipeline {
             progress.on_stage(Stage::Features, extract_count as u64);
             let counter = Mutex::new(0u64);
 
+            // Init the disk thumbnail cache once if requested. Persist runs
+            // in the rayon loop below so we never re-decode the source for
+            // the HTML report or for /thumb requests after this scan.
+            let thumb_cache: Option<ThumbDiskCache> = self.cfg.thumb_cache_dir.as_ref().map(|d| {
+                ThumbDiskCache::new(d.clone(), DEFAULT_THUMB_LONG_EDGE, DEFAULT_THUMB_QUALITY)
+            });
+
             let pairs: Vec<(PhotoId, [u8; 16], PhotoFeatures)> = to_extract
                 .par_iter()
                 .filter_map(|p| {
@@ -247,6 +263,9 @@ impl Pipeline {
                             return None;
                         }
                     };
+                    if let Some(c) = &thumb_cache {
+                        c.persist(&p.sha256_short, &thumb);
+                    }
                     let mut c = counter.lock().unwrap();
                     *c += 1;
                     progress.on_tick(Stage::Features, *c);
@@ -391,6 +410,9 @@ impl Pipeline {
             )?;
         }
         if let Some(html_path) = &self.cfg.html_report_path {
+            let report_thumb_cache = self.cfg.thumb_cache_dir.as_ref().map(|d| {
+                ThumbDiskCache::new(d.clone(), DEFAULT_THUMB_LONG_EDGE, DEFAULT_THUMB_QUALITY)
+            });
             write_html_report(
                 html_path,
                 &root_hint,
@@ -398,6 +420,7 @@ impl Pipeline {
                 &photos_by_id,
                 &stage_a_picks,
                 &composition_picks,
+                report_thumb_cache.as_ref(),
             )?;
         }
 

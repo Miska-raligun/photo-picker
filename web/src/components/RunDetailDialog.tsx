@@ -1,3 +1,5 @@
+import { useRef } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { ExternalLink, Loader2 } from "lucide-react";
 import {
   Dialog,
@@ -8,7 +10,6 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
-import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
 import { GroupCard } from "./GroupCard";
 import { ApplyBar } from "./ApplyBar";
 import { api } from "@/lib/api";
@@ -92,20 +93,12 @@ export function RunDetailDialog({
           {picks.length > 0 && (
             <>
               <Separator />
-              <ScrollArea className="w-full">
-                <div className="flex gap-6 py-3">
-                  {picks.map((p) => (
-                    <GroupCard
-                      key={p.index}
-                      runId={run.id}
-                      pick={p}
-                      overrides={overrides}
-                      onClick={() => onOpenGroup(p.index)}
-                    />
-                  ))}
-                </div>
-                <ScrollBar orientation="horizontal" />
-              </ScrollArea>
+              <VirtualGroupStrip
+                runId={run.id}
+                picks={picks}
+                overrides={overrides}
+                onOpenGroup={onOpenGroup}
+              />
             </>
           )}
 
@@ -153,6 +146,68 @@ export function RunDetailDialog({
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/// Horizontally-virtualized strip of `GroupCard`s. For long shoots the
+/// composition-picks list can run into the hundreds; rendering them all
+/// builds a multi-MB DOM and stutters scroll. The virtualizer keeps only
+/// the visible window mounted (plus a small overscan).
+function VirtualGroupStrip({
+  runId,
+  picks,
+  overrides,
+  onOpenGroup,
+}: {
+  runId: string;
+  picks: RunRecord["composition_picks"] extends infer T ? (T extends undefined ? never : T) : never;
+  overrides: Set<string>;
+  onOpenGroup: (pickIndex: number) => void;
+}) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  // GroupCard is `w-44` (176px) inside its button; we add 24px gap → 200px slot.
+  const ITEM_W = 200;
+  const CARD_AREA_H = 200; // card + label rows
+  const virt = useVirtualizer({
+    count: picks.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => ITEM_W,
+    horizontal: true,
+    overscan: 6,
+  });
+  return (
+    <div ref={scrollRef} className="w-full overflow-x-auto py-3">
+      <div
+        style={{
+          width: `${virt.getTotalSize()}px`,
+          height: `${CARD_AREA_H}px`,
+          position: "relative",
+        }}
+      >
+        {virt.getVirtualItems().map((vi) => {
+          const p = picks[vi.index];
+          return (
+            <div
+              key={p.index}
+              style={{
+                position: "absolute",
+                left: 0,
+                top: 0,
+                transform: `translateX(${vi.start}px)`,
+                width: `${vi.size}px`,
+              }}
+            >
+              <GroupCard
+                runId={runId}
+                pick={p}
+                overrides={overrides}
+                onClick={() => onOpenGroup(p.index)}
+              />
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
