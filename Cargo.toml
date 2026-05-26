@@ -44,6 +44,8 @@ axum              = "0.7"
 tokio             = { version = "1", features = ["rt-multi-thread", "macros", "fs", "sync"] }
 tower             = "0.5"
 tower-http        = { version = "0.6", features = ["trace", "cors"] }
+tokio-stream      = { version = "0.1", features = ["sync"] }
+futures-util      = "0.3"
 trash             = "5"
 rust-embed        = "8"
 mime_guess        = "2"

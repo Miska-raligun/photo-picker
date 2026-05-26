@@ -77,6 +77,12 @@ pub struct PipelineConfig {
     /// in UI, apply destructively to source" workflow.
     pub materialize_picks: bool,
     pub execution_provider: ExecutionProvider,
+    /// When true, look at the fraction of photos containing a meaningful
+    /// face and shift Stage A / Stage B CLIP thresholds:
+    /// portrait-heavy shoots tighten (avoid merging different people),
+    /// landscape-only shoots loosen (allow more burst / composition
+    /// consolidation). Magnitude capped at ±0.025.
+    pub adaptive_thresholds: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -265,9 +271,46 @@ impl Pipeline {
             features.insert(id, feat);
         }
 
+        // 2d. Optional adaptive-threshold bias: shifts CLIP thresholds based
+        //     on the fraction of photos with a non-trivial face. Portrait
+        //     shoots (high share) tighten thresholds (avoid merging different
+        //     people); landscape shoots loosen (allow more aggressive
+        //     consolidation). Bias clamped to ±0.025.
+        let (stage_a_params, stage_b_params) = if self.cfg.adaptive_thresholds && !features.is_empty() {
+            let total = features.len() as f32;
+            let portrait_count = features
+                .values()
+                .filter(|f| {
+                    f.face
+                        .as_ref()
+                        .map(|fi| fi.faces.iter().any(|fb| fb.area_ratio() >= 0.05))
+                        .unwrap_or(false)
+                })
+                .count() as f32;
+            let portrait_share = portrait_count / total;
+            let bias = ((portrait_share - 0.5) * 0.05).clamp(-0.025, 0.025);
+            tracing::info!(
+                portrait_share = portrait_share,
+                threshold_bias = bias,
+                "adaptive threshold bias applied"
+            );
+            let sa = StageAParams {
+                clip_threshold: (self.cfg.stage_a.clip_threshold + bias).clamp(0.7, 0.99),
+                ..self.cfg.stage_a.clone()
+            };
+            let sb = StageBParams {
+                similarity_threshold: (self.cfg.stage_b.similarity_threshold + bias)
+                    .clamp(0.7, 0.99),
+                chain_margin: self.cfg.stage_b.chain_margin,
+            };
+            (sa, sb)
+        } else {
+            (self.cfg.stage_a.clone(), self.cfg.stage_b.clone())
+        };
+
         // 3. Stage A clustering
         progress.on_stage(Stage::Cluster, 0);
-        let groups: Vec<Group> = cluster_stage_a(&photos, &features, &self.cfg.stage_a);
+        let groups: Vec<Group> = cluster_stage_a(&photos, &features, &stage_a_params);
         progress.on_finish(Stage::Cluster);
         tracing::info!(group_count = groups.len(), "stage A complete");
 
@@ -292,7 +335,7 @@ impl Pipeline {
                         .and_then(|f| f.clip_embed.clone().map(|e| (pid, e)))
                 })
                 .collect();
-            let bg = cluster_stage_b(&kept_with_embeds, &self.cfg.stage_b);
+            let bg = cluster_stage_b(&kept_with_embeds, &stage_b_params);
             progress.on_finish(Stage::StageB);
             tracing::info!(group_count = bg.len(), "stage B complete");
             bg

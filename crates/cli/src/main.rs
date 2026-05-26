@@ -199,6 +199,7 @@ fn run_scan(args: ScanArgs) -> Result<()> {
         enable_clip: !args.no_clip,
         enable_face: !args.no_face,
         materialize_picks: true,
+        adaptive_thresholds: true,
         execution_provider: ExecutionProvider::Cpu,
     };
 

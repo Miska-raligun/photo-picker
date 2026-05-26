@@ -1,11 +1,11 @@
 use photo_pick_core::ingest::{PhotoId, PhotoRef};
-use photo_pick_core::pipeline::PipelineReport;
+use photo_pick_core::pipeline::{PipelineReport, ProgressSink, Stage};
 use photo_pick_core::scoring::CompositionPick;
 use serde::Serialize;
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex as SyncMutex};
-use tokio::sync::{Mutex, Semaphore};
+use tokio::sync::{broadcast, Mutex, Semaphore};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
@@ -113,9 +113,76 @@ impl ThumbCache {
     }
 }
 
+/// One progress event from the pipeline's `ProgressSink`. Serialized to SSE
+/// `data:` payloads.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ProgressEvent {
+    Stage {
+        stage: String,
+        total: u64,
+    },
+    Tick {
+        stage: String,
+        done: u64,
+    },
+    Finish {
+        stage: String,
+    },
+    /// Terminal — the run completed or failed; sink drops its sender right
+    /// after sending this so subscribers see the stream close.
+    Done {
+        ok: bool,
+    },
+}
+
+fn stage_name(s: Stage) -> &'static str {
+    match s {
+        Stage::Scan => "scan",
+        Stage::Features => "features",
+        Stage::Cluster => "cluster",
+        Stage::Score => "score",
+        Stage::StageB => "stage_b",
+        Stage::FinalSelect => "final_select",
+        Stage::Write => "write",
+    }
+}
+
+/// `ProgressSink` implementation that broadcasts events to all SSE
+/// subscribers of a given run. Sync (called from the pipeline's rayon
+/// workers); `broadcast::Sender::send` is non-blocking and tolerates the
+/// no-subscribers case (returns `Err` which we discard).
+pub struct ChannelProgressSink {
+    pub tx: broadcast::Sender<ProgressEvent>,
+}
+
+impl ProgressSink for ChannelProgressSink {
+    fn on_stage(&self, stage: Stage, total: u64) {
+        let _ = self.tx.send(ProgressEvent::Stage {
+            stage: stage_name(stage).into(),
+            total,
+        });
+    }
+    fn on_tick(&self, stage: Stage, done: u64) {
+        let _ = self.tx.send(ProgressEvent::Tick {
+            stage: stage_name(stage).into(),
+            done,
+        });
+    }
+    fn on_finish(&self, stage: Stage) {
+        let _ = self.tx.send(ProgressEvent::Finish {
+            stage: stage_name(stage).into(),
+        });
+    }
+}
+
 #[derive(Clone)]
 pub struct AppState {
     pub runs: Arc<Mutex<HashMap<String, RunRecord>>>,
+    /// One broadcast channel per active run. SSE subscribers receive every
+    /// progress event from start to terminal `Done`. Sender is dropped when
+    /// the pipeline finishes, which closes the stream client-side.
+    pub progress_streams: Arc<Mutex<HashMap<String, broadcast::Sender<ProgressEvent>>>>,
     /// Insertion order — first element is the oldest run. Used to evict the
     /// least-recently-inserted completed run when `runs` grows past
     /// `max_runs`. Insert order is "good enough" given runs are append-only
@@ -151,6 +218,7 @@ impl AppState {
             .unwrap_or(50);
         Self {
             runs: Arc::new(Mutex::new(HashMap::new())),
+            progress_streams: Arc::new(Mutex::new(HashMap::new())),
             run_order: Arc::new(Mutex::new(VecDeque::new())),
             max_runs,
             scan_semaphore: Arc::new(Semaphore::new(scan_concurrency)),

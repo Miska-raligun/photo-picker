@@ -86,6 +86,25 @@ const enMessages = {
       inPlaceLabel: "In-place mode",
       inPlaceDesc:
         "Don't copy picks into the output folder. Review picks in the UI, then click Apply to delete rejected files from the source (recoverable via OS trash).",
+
+      adaptiveLabel: "Adaptive thresholds",
+      adaptiveDesc:
+        "Tighten Stage A/B CLIP thresholds for portrait-heavy shoots (avoid merging different people) and loosen for landscape-only (more aggressive grouping). Bias capped at ±0.025.",
+
+      providerLabel: "Execution provider",
+      providerDesc:
+        "ONNX runtime backend. CPU works everywhere; GPU options need the matching cargo feature compiled in — otherwise the server silently falls back to CPU.",
+
+      thumbEdgeLabel: "Analysis thumbnail size (px)",
+      thumbEdgeDesc:
+        "Long edge of the in-memory thumbnail fed to CLIP / face / scoring. Larger = sharper face detection on small subjects, much slower. 1024 is a good balance.",
+
+      linkModeLabel: "Output link mode",
+      linkModeDesc:
+        "How picks are placed in the output folder. Hardlinks are zero-cost when source and output live on the same filesystem.",
+      linkHardlink: "Hardlink (recommended, same filesystem)",
+      linkCopy: "Copy (safest, uses disk)",
+      linkSymlink: "Symlink (smallest, fragile if source moves)",
     },
     settings: {
       title: "Settings",
@@ -273,6 +292,21 @@ export const messages: Record<Lang, Messages> = {
 
       inPlaceLabel: "原地操作模式",
       inPlaceDesc: "不在输出目录生成 picked/。在界面里看选片结果，确认后点 Apply 把被拒照片删除（默认进回收站，可恢复）。",
+
+      adaptiveLabel: "自适应阈值",
+      adaptiveDesc: "人像多的拍摄自动收紧 Stage A/B 阈值（避免不同人脸被合并），风光多的放宽（更激进合并）。偏移幅度封顶 ±0.025。",
+
+      providerLabel: "推理后端",
+      providerDesc: "ONNX 运行时后端。CPU 通用；GPU 选项需要编译时启用对应 cargo feature，否则后台静默退回 CPU。",
+
+      thumbEdgeLabel: "分析缩略图长边（像素）",
+      thumbEdgeDesc: "用于 CLIP / 人脸 / 评分的内存缩略图长边。值越大对小人脸越敏感，但速度大幅下降。1024 是平衡值。",
+
+      linkModeLabel: "输出链接方式",
+      linkModeDesc: "把入选照片放到输出目录的方式。同一文件系统下硬链接零开销。",
+      linkHardlink: "硬链接（推荐，源/输出在同一磁盘）",
+      linkCopy: "复制（最稳，占磁盘）",
+      linkSymlink: "符号链接（最省，源移动后会失效）",
     },
     settings: {
       title: "设置",

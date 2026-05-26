@@ -7,7 +7,7 @@ use photo_pick_core::ingest::{
     classify_extension, decode_thumbnail_for, encode_jpeg, PhotoSource, ThumbnailSpec,
 };
 use photo_pick_core::models::ExecutionProvider;
-use photo_pick_core::pipeline::{LinkMode, NoopProgress, Pipeline, PipelineConfig};
+use photo_pick_core::pipeline::{LinkMode, Pipeline, PipelineConfig};
 use photo_pick_core::scoring::TechWeights;
 use photo_pick_core::vlm::{
     explain_group_prompt, AnthropicProvider, OpenAiProvider, VlmImage, VlmProvider, VlmRequest,
@@ -56,6 +56,19 @@ pub struct ScanRequest {
     /// `/api/runs/:id/apply`.
     #[serde(default)]
     pub in_place: bool,
+    /// "copy" | "hardlink" | "symlink". Ignored in in-place mode.
+    #[serde(default = "default_link_mode")]
+    pub link_mode: String,
+    /// Long-edge px for the analysis thumbnail (also caps preview size). 512–4096.
+    #[serde(default = "default_thumb_long_edge")]
+    pub thumbnail_long_edge: u32,
+    /// "cpu" | "cuda" | "coreml" | "directml". Falls back to cpu if the
+    /// requested provider isn't compiled in.
+    #[serde(default = "default_provider_str")]
+    pub execution_provider: String,
+    /// Apply portrait/landscape bias to Stage A/B thresholds.
+    #[serde(default = "default_adaptive")]
+    pub adaptive_thresholds: bool,
 }
 
 fn default_k1() -> usize { 3 }
@@ -68,6 +81,26 @@ fn default_threshold() -> f32 { 0.93 }
 fn default_stage_a_clip() -> f32 { 0.95 }
 fn default_clip() -> bool { true }
 fn default_face() -> bool { true }
+fn default_link_mode() -> String { "hardlink".into() }
+fn default_thumb_long_edge() -> u32 { 1024 }
+fn default_provider_str() -> String { "cpu".into() }
+fn default_adaptive() -> bool { true }
+
+fn parse_link_mode(s: &str) -> LinkMode {
+    match s {
+        "copy" => LinkMode::Copy,
+        "symlink" => LinkMode::Symlink,
+        _ => LinkMode::Hardlink,
+    }
+}
+fn parse_provider(s: &str) -> ExecutionProvider {
+    match s {
+        "cuda" => ExecutionProvider::Cuda,
+        "coreml" => ExecutionProvider::CoreMl,
+        "directml" => ExecutionProvider::DirectMl,
+        _ => ExecutionProvider::Cpu,
+    }
+}
 
 /// Kick off a scan in the blocking pool. Returns immediately with the run id;
 /// poll `/api/runs/{id}` to follow status.
@@ -107,8 +140,19 @@ pub async fn scan(
     };
     state.insert_run(record).await;
 
+    // Create a broadcast channel so SSE subscribers receive ProgressSink
+    // events; sender lives on the spawned task and is dropped when the
+    // pipeline finishes (which closes the SSE stream client-side).
+    let (progress_tx, _) = tokio::sync::broadcast::channel::<crate::state::ProgressEvent>(128);
+    state
+        .progress_streams
+        .lock()
+        .await
+        .insert(run_id.clone(), progress_tx.clone());
+
     let runs = state.runs.clone();
     let semaphore = state.scan_semaphore.clone();
+    let progress_streams = state.progress_streams.clone();
     let run_id_for_task = run_id.clone();
     let req_for_task = req;
     let source_for_task = source;
@@ -119,6 +163,8 @@ pub async fn scan(
         // requests. UI shows the run as `running` for the entire wait.
         let _permit = semaphore.acquire_owned().await.expect("semaphore closed");
         let runs_inner = runs.clone();
+        let progress_tx_inner = progress_tx.clone();
+        let run_id_for_blocking = run_id_for_task.clone();
         let _ = tokio::task::spawn_blocking(move || {
         let cfg = PipelineConfig {
             source: source_for_task,
@@ -140,18 +186,26 @@ pub async fn scan(
             k1: req_for_task.k1,
             k2: req_for_task.k2,
             tech_weights: TechWeights::default(),
-            link_mode: LinkMode::Hardlink,
-            thumbnail: ThumbnailSpec::default(),
+            link_mode: parse_link_mode(&req_for_task.link_mode),
+            thumbnail: ThumbnailSpec {
+                long_edge: req_for_task.thumbnail_long_edge.clamp(512, 4096),
+            },
             dry_run: false,
             enable_clip: req_for_task.enable_clip,
             enable_face: req_for_task.enable_face,
             materialize_picks: !req_for_task.in_place,
-            execution_provider: ExecutionProvider::Cpu,
+            execution_provider: parse_provider(&req_for_task.execution_provider),
+            adaptive_thresholds: req_for_task.adaptive_thresholds,
         };
         let pipeline = Pipeline::new(cfg);
-        let result = pipeline.run(&NoopProgress);
+        let sink = crate::state::ChannelProgressSink { tx: progress_tx_inner.clone() };
+        let result = pipeline.run(&sink);
+        // Send a terminal Done so SSE clients know to stop subscribing.
+        let _ = progress_tx_inner.send(crate::state::ProgressEvent::Done {
+            ok: result.is_ok(),
+        });
         let mut guard = runs_inner.blocking_lock();
-        if let Some(rec) = guard.get_mut(&run_id_for_task) {
+        if let Some(rec) = guard.get_mut(&run_id_for_blocking) {
             match result {
                 Ok(output) => {
                     rec.status = RunStatus::Completed;
@@ -166,10 +220,63 @@ pub async fn scan(
             }
         }
         }).await;
+        // Close the broadcast channel by removing it from the registry; any
+        // remaining subscribers see the stream end.
+        progress_streams.lock().await.remove(&run_id_for_task);
         drop(_permit);
     });
 
     Ok(Json(serde_json::json!({ "run_id": run_id })))
+}
+
+/// SSE stream of `ProgressEvent`s for a single run. Subscribers join the
+/// existing broadcast channel; new subscribers don't replay past events
+/// (only see new ones), so the UI should also poll `/api/runs/:id` for the
+/// snapshot at subscription time.
+pub async fn run_events(
+    State(state): State<AppState>,
+    Path(run_id): Path<String>,
+) -> impl IntoResponse {
+    use axum::response::sse::{Event, KeepAlive, Sse};
+    use futures_util::stream::StreamExt;
+    use std::convert::Infallible;
+    use tokio_stream::wrappers::BroadcastStream;
+
+    let rx = {
+        let guard = state.progress_streams.lock().await;
+        match guard.get(&run_id) {
+            Some(tx) => Some(tx.subscribe()),
+            None => None,
+        }
+    };
+
+    // No stream registered → the run already finished (or never existed).
+    // Emit a single Done so the client knows to stop trying.
+    if rx.is_none() {
+        let one = futures_util::stream::once(async {
+            Ok::<_, Infallible>(
+                Event::default()
+                    .event("progress")
+                    .json_data(crate::state::ProgressEvent::Done { ok: true })
+                    .unwrap(),
+            )
+        });
+        return Sse::new(one).keep_alive(KeepAlive::default()).into_response();
+    }
+
+    let stream = BroadcastStream::new(rx.unwrap()).filter_map(|msg| async move {
+        match msg {
+            Ok(ev) => Some(Ok::<_, Infallible>(
+                Event::default()
+                    .event("progress")
+                    .json_data(ev)
+                    .unwrap_or_else(|_| Event::default().data("bad-event")),
+            )),
+            Err(_) => None, // lagged / channel closed — drop silently
+        }
+    });
+
+    Sse::new(stream).keep_alive(KeepAlive::default()).into_response()
 }
 
 #[derive(Debug, Deserialize)]

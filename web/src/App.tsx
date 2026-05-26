@@ -10,7 +10,7 @@ import { ErrorBoundary } from "./components/ErrorBoundary";
 import { Button } from "./components/ui/button";
 import { Toaster } from "./components/ui/sonner";
 import { api } from "./lib/api";
-import type { RunRecord, VlmSettings } from "./lib/types";
+import type { ProgressEvent, RunProgress, RunRecord, VlmSettings } from "./lib/types";
 import { I18nContext, LANG_STORAGE_KEY, messages, type Lang } from "./lib/i18n";
 import { loadVlmSettings } from "./lib/vlmStore";
 
@@ -32,46 +32,96 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   const [runs, setRuns] = useState<RunRecord[]>([]);
+  const [progress, setProgress] = useState<Map<string, RunProgress>>(new Map());
   const [overrides, setOverrides] = useState<Map<string, Set<string>>>(new Map());
   const [detailRunId, setDetailRunId] = useState<string | null>(null);
   const [groupRun, setGroupRun] = useState<string | null>(null);
   const [groupIdx, setGroupIdx] = useState<number | null>(null);
-  // Per-run AbortController — lets us cancel the polling loop on unmount or
-  // when the run finishes, without leaking a fetch-and-sleep loop forever.
-  const pollAbortRef = useRef<Map<string, AbortController>>(new Map());
+  // Per-run EventSource — lets us close all live SSE streams on unmount or
+  // when the run finishes. Replaces the previous 600ms polling loop.
+  const sseRef = useRef<Map<string, EventSource>>(new Map());
 
-  const schedulePoll = useCallback((runId: string) => {
-    if (pollAbortRef.current.has(runId)) return;
-    const ac = new AbortController();
-    pollAbortRef.current.set(runId, ac);
-    (async () => {
-      while (!ac.signal.aborted) {
-        await new Promise((r) => setTimeout(r, 600));
-        if (ac.signal.aborted) break;
-        try {
-          const r = await api.getRun(runId);
-          if (ac.signal.aborted) break;
-          setRuns((prev) => {
-            const i = prev.findIndex((x) => x.id === runId);
-            if (i === -1) return [r, ...prev];
-            const out = [...prev];
-            out[i] = r;
-            return out;
-          });
-          if (r.status.state !== "running") break;
-        } catch {
-          break;
-        }
-      }
-      pollAbortRef.current.delete(runId);
-    })();
+  const refreshRun = useCallback(async (runId: string) => {
+    try {
+      const r = await api.getRun(runId);
+      setRuns((prev) => {
+        const i = prev.findIndex((x) => x.id === runId);
+        if (i === -1) return [r, ...prev];
+        const out = [...prev];
+        out[i] = r;
+        return out;
+      });
+    } catch (e) {
+      console.error("refresh run", runId, e);
+    }
   }, []);
 
-  // On unmount, abort every active poll.
+  const subscribeProgress = useCallback(
+    (runId: string) => {
+      if (sseRef.current.has(runId)) return;
+      // EventSource follows current-origin; works against the same axum host
+      // that serves the app. Cookies/CORS not in play because same-origin.
+      const es = new EventSource(`/api/runs/${runId}/events`);
+      sseRef.current.set(runId, es);
+
+      const cleanup = () => {
+        es.close();
+        sseRef.current.delete(runId);
+        setProgress((prev) => {
+          if (!prev.has(runId)) return prev;
+          const next = new Map(prev);
+          next.delete(runId);
+          return next;
+        });
+      };
+
+      es.addEventListener("progress", (raw) => {
+        let ev: ProgressEvent;
+        try {
+          ev = JSON.parse((raw as MessageEvent).data);
+        } catch {
+          return;
+        }
+        if (ev.kind === "stage") {
+          setProgress((prev) => {
+            const next = new Map(prev);
+            next.set(runId, { stage: ev.stage, done: 0, total: ev.total });
+            return next;
+          });
+        } else if (ev.kind === "tick") {
+          setProgress((prev) => {
+            const next = new Map(prev);
+            const cur = next.get(runId);
+            next.set(runId, {
+              stage: ev.stage,
+              done: ev.done,
+              total: cur?.stage === ev.stage ? cur.total : 0,
+            });
+            return next;
+          });
+        } else if (ev.kind === "finish") {
+          // Don't clear — keep the bar full until the next stage starts.
+        } else if (ev.kind === "done") {
+          // Terminal: refresh the full record, then close.
+          refreshRun(runId).finally(cleanup);
+        }
+      });
+
+      es.addEventListener("error", () => {
+        // Server closed the channel (run already finished) or transient
+        // network blip — fall back to a single refresh so the UI doesn't
+        // get stuck in `running` forever.
+        refreshRun(runId).finally(cleanup);
+      });
+    },
+    [refreshRun]
+  );
+
+  // On unmount, close every active SSE stream.
   useEffect(() => {
     return () => {
-      for (const ac of pollAbortRef.current.values()) ac.abort();
-      pollAbortRef.current.clear();
+      for (const es of sseRef.current.values()) es.close();
+      sseRef.current.clear();
     };
   }, []);
 
@@ -83,13 +133,13 @@ export default function App() {
         const full = await Promise.all(list.map((r) => api.getRun(r.id)));
         setRuns(full);
         for (const r of full) {
-          if (r.status.state === "running") schedulePoll(r.id);
+          if (r.status.state === "running") subscribeProgress(r.id);
         }
       } catch (e) {
         console.error("initial run load", e);
       }
     })();
-  }, [schedulePoll]);
+  }, [subscribeProgress]);
 
   function handleScanStarted(runId: string, summary: string, output: string) {
     const placeholder: RunRecord = {
@@ -104,7 +154,7 @@ export default function App() {
       explanations: {},
     };
     setRuns((prev) => [placeholder, ...prev]);
-    schedulePoll(runId);
+    subscribeProgress(runId);
   }
 
   function getOverrides(runId: string): Set<string> {
@@ -168,6 +218,7 @@ export default function App() {
                 <ErrorBoundary key={r.id} resetKey={r.status.state}>
                   <RunCard
                     run={r}
+                    progress={progress.get(r.id) ?? null}
                     onOpenDetail={() => setDetailRunId(r.id)}
                   />
                 </ErrorBoundary>
@@ -185,7 +236,7 @@ export default function App() {
             setGroupRun(detailRunId);
             setGroupIdx(idx);
           }}
-          onApplyDone={() => detailRunId && schedulePoll(detailRunId)}
+          onApplyDone={() => detailRunId && subscribeProgress(detailRunId)}
         />
 
         <GroupDetailDialog

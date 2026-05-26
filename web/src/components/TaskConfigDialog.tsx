@@ -12,6 +12,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Separator } from "@/components/ui/separator";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { FieldHelp } from "./FieldHelp";
 import { SliderInput } from "./SliderInput";
 import { api } from "@/lib/api";
@@ -48,6 +55,12 @@ export function TaskConfigDialog({
   const [stageBClip, setStageBClip] = useState(0.93);
   const [enableClip, setEnableClip] = useState(true);
   const [enableFace, setEnableFace] = useState(true);
+  const [adaptiveThresholds, setAdaptiveThresholds] = useState(true);
+  const [linkMode, setLinkMode] = useState<"copy" | "hardlink" | "symlink">("hardlink");
+  const [thumbLongEdge, setThumbLongEdge] = useState(1024);
+  const [executionProvider, setExecutionProvider] = useState<
+    "cpu" | "cuda" | "coreml" | "directml"
+  >("cpu");
   const [submitting, setSubmitting] = useState(false);
 
   async function start() {
@@ -66,6 +79,10 @@ export function TaskConfigDialog({
         enable_clip: enableClip,
         enable_face: enableFace,
         in_place: inPlace,
+        adaptive_thresholds: adaptiveThresholds,
+        link_mode: linkMode,
+        thumbnail_long_edge: thumbLongEdge,
+        execution_provider: executionProvider,
         ...(files && files.length > 0 ? { files } : { root: source }),
       };
       // When in-place mode, we still need an output dir for cache + reports;
@@ -238,7 +255,80 @@ export function TaskConfigDialog({
               checked={enableFace}
               onChange={setEnableFace}
             />
+            <CheckboxRow
+              label={m.scanForm.adaptiveLabel}
+              desc={m.scanForm.adaptiveDesc}
+              checked={adaptiveThresholds}
+              onChange={setAdaptiveThresholds}
+            />
           </div>
+
+          <Separator />
+
+          <div className="grid sm:grid-cols-2 gap-5">
+            <FieldHelp
+              label={m.scanForm.providerLabel}
+              desc={m.scanForm.providerDesc}
+            >
+              <Select
+                value={executionProvider}
+                onValueChange={(v) =>
+                  setExecutionProvider(v as typeof executionProvider)
+                }
+              >
+                <SelectTrigger className="text-sm w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="cpu">CPU</SelectItem>
+                  <SelectItem value="cuda">CUDA (NVIDIA)</SelectItem>
+                  <SelectItem value="coreml">CoreML (macOS)</SelectItem>
+                  <SelectItem value="directml">DirectML (Windows)</SelectItem>
+                </SelectContent>
+              </Select>
+            </FieldHelp>
+            <FieldHelp
+              label={m.scanForm.thumbEdgeLabel}
+              htmlFor="thumb_long_edge"
+              desc={m.scanForm.thumbEdgeDesc}
+            >
+              <Input
+                id="thumb_long_edge"
+                type="number"
+                min={512}
+                max={4096}
+                step={64}
+                value={thumbLongEdge}
+                onChange={(e) =>
+                  setThumbLongEdge(
+                    Math.max(512, Math.min(4096, parseInt(e.target.value) || 1024))
+                  )
+                }
+                className="text-sm w-32"
+              />
+            </FieldHelp>
+          </div>
+
+          {!inPlace && (
+            <FieldHelp
+              label={m.scanForm.linkModeLabel}
+              desc={m.scanForm.linkModeDesc}
+            >
+              <Select
+                value={linkMode}
+                onValueChange={(v) => setLinkMode(v as typeof linkMode)}
+              >
+                <SelectTrigger className="text-sm w-full sm:w-64">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="hardlink">{m.scanForm.linkHardlink}</SelectItem>
+                  <SelectItem value="copy">{m.scanForm.linkCopy}</SelectItem>
+                  <SelectItem value="symlink">{m.scanForm.linkSymlink}</SelectItem>
+                </SelectContent>
+              </Select>
+            </FieldHelp>
+          )}
         </div>
 
         <DialogFooter className="px-6 py-4 border-t bg-muted/30">

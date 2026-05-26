@@ -3,15 +3,16 @@ import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useM } from "@/lib/i18n";
-import type { RunRecord } from "@/lib/types";
+import type { RunProgress, RunRecord } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 interface Props {
   run: RunRecord;
+  progress?: RunProgress | null;
   onOpenDetail: () => void;
 }
 
-export function RunCard({ run, onOpenDetail }: Props) {
+export function RunCard({ run, progress, onOpenDetail }: Props) {
   const m = useM();
   const state = run.status.state;
   const error = state === "failed" ? run.status.error : null;
@@ -74,6 +75,30 @@ export function RunCard({ run, onOpenDetail }: Props) {
       </CardHeader>
 
       <CardContent className="space-y-3">
+        {state === "running" && progress && (
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between text-xs text-muted-foreground">
+              <span className="font-mono">{progress.stage}</span>
+              <span className="tabular-nums">
+                {progress.total > 0
+                  ? `${progress.done} / ${progress.total}`
+                  : `${progress.done}`}
+              </span>
+            </div>
+            <div className="h-1.5 rounded bg-muted overflow-hidden">
+              <div
+                className="h-full bg-primary transition-[width] duration-200"
+                style={{
+                  width:
+                    progress.total > 0
+                      ? `${Math.min(100, (progress.done / progress.total) * 100)}%`
+                      : "20%",
+                }}
+              />
+            </div>
+          </div>
+        )}
+
         {report && (
           <div className="flex flex-wrap gap-1.5">
             <StatPill label={m.runCard.statPhotos} value={report.photo_count} />

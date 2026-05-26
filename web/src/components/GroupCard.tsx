@@ -27,10 +27,12 @@ export function GroupCard({ runId, pick, overrides, onClick }: Props) {
     >
       <div className="relative h-32 w-40 mx-auto">
         {total >= 3 && (
-          <div className="absolute inset-0 rounded-lg border bg-[oklch(0.95_0.012_75)] shadow-sm rotate-[-1.8deg] translate-x-[11px] translate-y-[9px]" />
+          // Use --muted (dark-mode-aware) instead of a hardcoded light oklch
+          // so the back layer stays visible against dark backgrounds.
+          <div className="absolute inset-0 rounded-lg border border-border bg-muted shadow-sm rotate-[-1.8deg] translate-x-[11px] translate-y-[9px]" />
         )}
         {total >= 2 && (
-          <div className="absolute inset-0 rounded-lg border bg-card shadow-sm rotate-[2.5deg] translate-x-[6px] translate-y-[5px]" />
+          <div className="absolute inset-0 rounded-lg border border-border bg-card shadow-sm rotate-[2.5deg] translate-x-[6px] translate-y-[5px]" />
         )}
         <div className="absolute inset-0 rounded-lg border border-border overflow-hidden bg-muted shadow-md z-10">
           {thumb && (

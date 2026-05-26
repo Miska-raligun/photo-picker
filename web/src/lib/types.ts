@@ -78,6 +78,26 @@ export interface ScanRequest {
   enable_clip?: boolean;
   enable_face?: boolean;
   in_place?: boolean;
+  adaptive_thresholds?: boolean;
+  link_mode?: "copy" | "hardlink" | "symlink";
+  thumbnail_long_edge?: number;
+  execution_provider?: "cpu" | "cuda" | "coreml" | "directml";
+}
+
+/// Live progress event delivered over SSE from `/api/runs/:id/events`.
+/// `Done` is terminal — the server drops the channel right after.
+export type ProgressEvent =
+  | { kind: "stage"; stage: string; total: number }
+  | { kind: "tick"; stage: string; done: number }
+  | { kind: "finish"; stage: string }
+  | { kind: "done"; ok: boolean };
+
+/// Client-side derived progress for the currently-running stage. Built from
+/// the SSE stream; not part of the server-side `RunRecord` JSON.
+export interface RunProgress {
+  stage: string;
+  done: number;
+  total: number;
 }
 
 export interface BrowseFile {
