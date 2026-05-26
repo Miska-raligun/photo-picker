@@ -107,26 +107,88 @@ impl YunetFaceDetector {
             .map(|f| project_to_source(f, &meta))
             .collect();
 
-        // Fill local_sharpness per face by cropping the bbox out of the
-        // thumbnail's luma plane and running the shared Laplacian-variance
-        // helper. score_group_final later normalizes these within the group
-        // so absolute scale doesn't matter — we just need a comparable
-        // signal per face.
+        // Derive per-face signals from the projected bbox + keypoints.
         if !faces.is_empty() {
             let gray = thumb.to_luma8();
             let (tw, th) = (gray.width(), gray.height());
-            for f in faces.iter_mut() {
-                let x = (f.x * tw as f32) as u32;
-                let y = (f.y * th as f32) as u32;
-                let w = (f.w * tw as f32) as u32;
-                let h = (f.h * th as f32) as u32;
-                let x = x.min(tw.saturating_sub(1));
-                let y = y.min(th.saturating_sub(1));
-                let w = w.min(tw - x);
-                let h = h.min(th - y);
-                if w >= 8 && h >= 8 {
-                    let roi = image::imageops::crop_imm(&gray, x, y, w, h).to_image();
-                    f.local_sharpness = Some(crate::scoring::sharpness::laplacian_variance(&roi));
+            for (f, raw) in faces.iter_mut().zip(kept.iter()) {
+                // (a) bbox-local sharpness (group-normalized downstream).
+                let bx = ((f.x * tw as f32) as u32).min(tw.saturating_sub(1));
+                let by = ((f.y * th as f32) as u32).min(th.saturating_sub(1));
+                let bw = ((f.w * tw as f32) as u32).min(tw - bx);
+                let bh = ((f.h * th as f32) as u32).min(th - by);
+                if bw >= 8 && bh >= 8 {
+                    let roi = image::imageops::crop_imm(&gray, bx, by, bw, bh).to_image();
+                    f.local_sharpness =
+                        Some(crate::scoring::sharpness::laplacian_variance(&roi));
+                }
+
+                // (b) Project keypoints from 640×640 input space to source.
+                let project = |kx: f32, ky: f32| -> Option<(u32, u32)> {
+                    let sx = (kx - meta.pad_x as f32) / meta.scale;
+                    let sy = (ky - meta.pad_y as f32) / meta.scale;
+                    if sx < 0.0 || sy < 0.0 {
+                        return None;
+                    }
+                    let sxu = (sx as u32).min(tw.saturating_sub(1));
+                    let syu = (sy as u32).min(th.saturating_sub(1));
+                    Some((sxu, syu))
+                };
+                let (re, le, rm, lm) = (
+                    project(raw.kps[0].0, raw.kps[0].1),
+                    project(raw.kps[1].0, raw.kps[1].1),
+                    project(raw.kps[3].0, raw.kps[3].1),
+                    project(raw.kps[4].0, raw.kps[4].1),
+                );
+
+                // (c) Eye-open heuristic: Laplacian variance on small luma
+                //     patches around each eye keypoint. Open eyes have far
+                //     more high-frequency detail (lashes, iris, sclera
+                //     boundary) than closed lids. tanh-normalize to [0,1]
+                //     against an empirical baseline (~40 lap-var).
+                let eye_patch = (bw / 8).clamp(8, 64);
+                let crop_patch = |c: (u32, u32)| -> Option<image::GrayImage> {
+                    let (cx, cy) = c;
+                    let half = eye_patch / 2;
+                    let x = cx.saturating_sub(half);
+                    let y = cy.saturating_sub(half);
+                    let w = eye_patch.min(tw - x);
+                    let h = eye_patch.min(th - y);
+                    if w < 4 || h < 4 {
+                        return None;
+                    }
+                    Some(image::imageops::crop_imm(&gray, x, y, w, h).to_image())
+                };
+                if let (Some(re), Some(le)) = (re, le) {
+                    if let (Some(re_img), Some(le_img)) = (crop_patch(re), crop_patch(le)) {
+                        let rv = crate::scoring::sharpness::laplacian_variance(&re_img);
+                        let lv = crate::scoring::sharpness::laplacian_variance(&le_img);
+                        // Both eyes need to be open; min is more conservative
+                        // than mean (a half-closed eye drops the score).
+                        let avg = rv.min(lv);
+                        f.eye_open_prob = Some((avg / 40.0).tanh().clamp(0.0, 1.0));
+                    }
+                }
+
+                // (d) Smile heuristic: mouth-corner spread normalized by
+                //     interocular distance. Neutral ≈ 0.6–0.7, smile ≈ 0.85+.
+                if let (Some((rex, rey)), Some((lex, ley)), Some((rmx, rmy)), Some((lmx, lmy))) =
+                    (re, le, rm, lm)
+                {
+                    let inter = (((lex as f32 - rex as f32).powi(2)
+                        + (ley as f32 - rey as f32).powi(2))
+                        as f32)
+                        .sqrt();
+                    if inter > 8.0 {
+                        let mouth = (((lmx as f32 - rmx as f32).powi(2)
+                            + (lmy as f32 - rmy as f32).powi(2))
+                            as f32)
+                            .sqrt();
+                        let ratio = mouth / inter;
+                        // Centered sigmoid: ratio 0.6 → ~0.12, 0.8 → 0.5, 1.0 → ~0.88.
+                        let smile = 1.0 / (1.0 + (-(ratio - 0.8) * 10.0).exp());
+                        f.smile_prob = Some(smile.clamp(0.0, 1.0));
+                    }
                 }
             }
         }
@@ -151,7 +213,10 @@ struct RawFace {
     x2: f32,
     y2: f32,
     score: f32,
-    #[allow(dead_code)]
+    /// 5 keypoints in 640×640 input pixel space.
+    /// Order (per YuNet/InsightFace convention):
+    ///   0: right eye, 1: left eye, 2: nose,
+    ///   3: right mouth corner, 4: left mouth corner.
     kps: [(f32, f32); 5],
 }
 

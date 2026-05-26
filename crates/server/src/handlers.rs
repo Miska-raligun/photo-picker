@@ -105,7 +105,7 @@ pub async fn scan(
         photos: HashMap::new(),
         explanations: HashMap::new(),
     };
-    state.runs.lock().await.insert(run_id.clone(), record);
+    state.insert_run(record).await;
 
     let runs = state.runs.clone();
     let semaphore = state.scan_semaphore.clone();
@@ -135,6 +135,7 @@ pub async fn scan(
             },
             stage_b: StageBParams {
                 similarity_threshold: req_for_task.stage_b_threshold,
+                chain_margin: StageBParams::default().chain_margin,
             },
             k1: req_for_task.k1,
             k2: req_for_task.k2,

@@ -302,6 +302,100 @@ export function GroupDetailDialog({
   );
 }
 
+/// Per-scene weights — must mirror `FinalWeights::for_scene` in the Rust
+/// scoring crate. Used to identify the dominant contributor.
+const SCENE_WEIGHTS: Record<string, { tech: number; aesthetic: number; composition: number; face_bonus: number }> = {
+  portrait: { tech: 0.30, aesthetic: 0.20, composition: 0.15, face_bonus: 0.35 },
+  landscape: { tech: 0.35, aesthetic: 0.40, composition: 0.25, face_bonus: 0.00 },
+  mixed:    { tech: 0.32, aesthetic: 0.30, composition: 0.20, face_bonus: 0.18 },
+};
+
+function ScoreBreakdown({ fs }: { fs: NonNullable<PhotoView["final_score"]> }) {
+  const m = useM();
+  const weights = SCENE_WEIGHTS[fs.scene] ?? SCENE_WEIGHTS.mixed;
+  const components = [
+    { key: "tech", label: m.detail.scoreTech, value: fs.tech, weight: weights.tech },
+    { key: "aesthetic", label: m.detail.scoreAesthetic, value: fs.aesthetic, weight: weights.aesthetic },
+    { key: "composition", label: m.detail.scoreComposition, value: fs.composition, weight: weights.composition },
+    { key: "face_bonus", label: m.detail.scoreFaceBonus, value: fs.face_bonus, weight: weights.face_bonus },
+  ];
+  // Dominant = largest weight×value contribution to the final score.
+  let dominant = "";
+  let best = -1;
+  for (const c of components) {
+    const contrib = c.value * c.weight;
+    if (contrib > best) {
+      best = contrib;
+      dominant = c.key;
+    }
+  }
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-baseline justify-between text-xs">
+        <span className="text-muted-foreground font-mono">{m.detail.scoreFinal}</span>
+        <span className="text-primary font-mono font-semibold tabular-nums">
+          {fs.value.toFixed(2)}
+        </span>
+      </div>
+      <div className="space-y-1">
+        {components.map((c) => (
+          <ScoreBar
+            key={c.key}
+            label={c.label}
+            value={c.value}
+            disabled={c.weight === 0}
+            dominant={c.key === dominant && c.weight > 0}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ScoreBar({
+  label,
+  value,
+  disabled,
+  dominant,
+}: {
+  label: string;
+  value: number;
+  disabled: boolean;
+  dominant: boolean;
+}) {
+  const pct = Math.max(0, Math.min(100, value * 100));
+  return (
+    <div className="flex items-center gap-2 text-[0.7rem] font-mono">
+      <span
+        className={`w-16 shrink-0 ${
+          disabled ? "text-muted-foreground/50 line-through" : "text-muted-foreground"
+        }`}
+      >
+        {label}
+      </span>
+      <div className="flex-1 h-1.5 rounded-full bg-muted overflow-hidden">
+        <div
+          className={`h-full transition-[width] ${
+            disabled
+              ? "bg-muted-foreground/20"
+              : dominant
+              ? "bg-primary"
+              : "bg-foreground/40"
+          }`}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+      <span
+        className={`tabular-nums w-9 text-right ${
+          disabled ? "text-muted-foreground/50" : ""
+        }`}
+      >
+        {value.toFixed(2)}
+      </span>
+    </div>
+  );
+}
+
 function PhotoCard({
   runId,
   photo,
@@ -417,22 +511,8 @@ function PhotoCard({
         <div className="text-xs font-medium text-foreground break-all leading-tight">
           {photo.filename ?? photo.photo_id.slice(0, 8)}
         </div>
-        {fs && (
-          <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 font-mono text-[0.7rem]">
-            <span className="text-muted-foreground">{m.detail.scoreFinal}</span>
-            <span className="text-primary font-semibold tabular-nums">
-              {fs.value.toFixed(2)}
-            </span>
-            <span className="text-muted-foreground">{m.detail.scoreTech}</span>
-            <span className="tabular-nums">{fs.tech.toFixed(2)}</span>
-            <span className="text-muted-foreground">{m.detail.scoreAesthetic}</span>
-            <span className="tabular-nums">{fs.aesthetic.toFixed(2)}</span>
-            <span className="text-muted-foreground">{m.detail.scoreComposition}</span>
-            <span className="tabular-nums">{fs.composition.toFixed(2)}</span>
-            <span className="text-muted-foreground">{m.detail.scoreFaceBonus}</span>
-            <span className="tabular-nums">{fs.face_bonus.toFixed(2)}</span>
-          </div>
-        )}
+        {fs && <ScoreBreakdown fs={fs} />}
+        {/* aiReason block below */}
         {aiReason && (
           <div className="border-l-2 border-primary bg-primary/5 rounded-r-md px-2.5 py-1.5 text-xs leading-snug text-foreground/80 mt-1">
             <span className="font-mono font-semibold text-primary mr-1.5">

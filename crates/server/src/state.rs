@@ -116,6 +116,15 @@ impl ThumbCache {
 #[derive(Clone)]
 pub struct AppState {
     pub runs: Arc<Mutex<HashMap<String, RunRecord>>>,
+    /// Insertion order — first element is the oldest run. Used to evict the
+    /// least-recently-inserted completed run when `runs` grows past
+    /// `max_runs`. Insert order is "good enough" given runs are append-only
+    /// (no in-place mutation triggers a reorder) and the photographer's
+    /// mental model is "old runs go away first".
+    pub run_order: Arc<Mutex<VecDeque<String>>>,
+    /// Soft cap on retained runs in memory. Tunable via PHOTO_PICK_MAX_RUNS
+    /// (default 50). Currently-running runs are never evicted.
+    pub max_runs: usize,
     /// Bounds concurrent scan pipelines so N parallel /api/scan POSTs don't
     /// oversubscribe the blocking pool and starve thumbnail / detail
     /// requests. Configurable via PHOTO_PICK_SCAN_CONCURRENCY (default 2).
@@ -135,10 +144,44 @@ impl AppState {
             .ok()
             .and_then(|s| s.parse::<usize>().ok())
             .unwrap_or(256);
+        let max_runs = std::env::var("PHOTO_PICK_MAX_RUNS")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .filter(|n| *n > 0)
+            .unwrap_or(50);
         Self {
             runs: Arc::new(Mutex::new(HashMap::new())),
+            run_order: Arc::new(Mutex::new(VecDeque::new())),
+            max_runs,
             scan_semaphore: Arc::new(Semaphore::new(scan_concurrency)),
             thumb_cache: Arc::new(ThumbCache::new(thumb_cache_mb * 1024 * 1024)),
+        }
+    }
+
+    /// Register a new run + enforce the LRU cap. Evicts non-running records
+    /// from the oldest end until we're at or below `max_runs`.
+    pub async fn insert_run(&self, record: RunRecord) {
+        let id = record.id.clone();
+        let mut runs = self.runs.lock().await;
+        let mut order = self.run_order.lock().await;
+        runs.insert(id.clone(), record);
+        order.push_back(id);
+        while runs.len() > self.max_runs {
+            let Some(victim) = order.pop_front() else { break };
+            if runs
+                .get(&victim)
+                .map(|r| matches!(r.status, RunStatus::Running))
+                .unwrap_or(false)
+            {
+                // Don't evict a running scan; push it back to the tail.
+                order.push_back(victim);
+                if order.len() == runs.len() {
+                    // Whole map is currently running — give up evicting.
+                    break;
+                }
+                continue;
+            }
+            runs.remove(&victim);
         }
     }
 }
