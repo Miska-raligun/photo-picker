@@ -178,6 +178,7 @@ const enMessages = {
       previewFailed: "failed to load preview",
       toggleToReject: "Currently keeping (click to mark for delete)",
       toggleToKeep: "Will delete (click to mark to keep)",
+      lightboxHint: "scroll · double-click to zoom · drag to pan · ESC to close",
     },
     applyBar: {
       willDelete: "Will delete",
@@ -385,6 +386,7 @@ export const messages: Record<Lang, Messages> = {
       previewFailed: "预览加载失败",
       toggleToReject: "保留中（点击改为删除）",
       toggleToKeep: "将删除（点击改为保留）",
+      lightboxHint: "滚轮缩放 · 双击放大 · 拖动平移 · ESC 关闭",
     },
     applyBar: {
       willDelete: "即将删除",
