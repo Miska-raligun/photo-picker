@@ -20,7 +20,9 @@ use std::path::Path;
 /// - v1: M4.1 initial (technical scores + CLIP embed + face stub data)
 /// - v2: M3.5-real YuNet face detection wired in — old rows have empty face data
 /// - v3: real composition + aesthetic heuristics replace 0.5 stubs
-pub const FEATURE_SCHEMA_VERSION: i64 = 3;
+/// - v4: EXIF orientation applied at decode — thumbnails (hence all derived
+///   features) differ for rotated shots, so old rows must be re-extracted
+pub const FEATURE_SCHEMA_VERSION: i64 = 4;
 
 pub struct CacheStore {
     conn: Connection,

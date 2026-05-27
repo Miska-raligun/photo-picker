@@ -51,7 +51,27 @@ fn decode_thumbnail_with_format(
                 .map_err(|e| Error::Decode { path: path.to_path_buf(), source: e })?
         }
     };
+    // Upright the image per its EXIF orientation before downscaling. Cameras
+    // store pixels in sensor order + an orientation tag; without this, portrait
+    // shots are processed and displayed sideways (and YuNet, trained on upright
+    // faces, misses them). RAW embedded previews follow the same convention.
+    let img = apply_exif_orientation(img, super::exif::read_orientation(path));
     Ok(downscale(img, spec.long_edge))
+}
+
+/// Apply an EXIF orientation value (1–8) to an image. Value 1 (and anything
+/// unrecognized) is a no-op.
+fn apply_exif_orientation(img: DynamicImage, orientation: u16) -> DynamicImage {
+    match orientation {
+        2 => img.fliph(),
+        3 => img.rotate180(),
+        4 => img.flipv(),
+        5 => img.rotate90().fliph(),
+        6 => img.rotate90(),
+        7 => img.rotate270().fliph(),
+        8 => img.rotate270(),
+        _ => img,
+    }
 }
 
 fn classify_or_jpeg(path: &Path) -> ImageFormat {
@@ -210,4 +230,46 @@ fn downscale(img: DynamicImage, long_edge: u32) -> DynamicImage {
     let new_w = (w as f32 * scale).round().max(1.0) as u32;
     let new_h = (h as f32 * scale).round().max(1.0) as u32;
     img.resize_exact(new_w, new_h, image::imageops::FilterType::Triangle)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use image::{DynamicImage, Rgb, RgbImage};
+
+    fn sample() -> DynamicImage {
+        // 3 wide × 2 tall, asymmetric so transforms are distinguishable.
+        let mut img = RgbImage::new(3, 2);
+        for (x, y, p) in img.enumerate_pixels_mut() {
+            *p = Rgb([x as u8 * 40, y as u8 * 40, 0]);
+        }
+        DynamicImage::ImageRgb8(img)
+    }
+
+    #[test]
+    fn orientation_1_is_identity() {
+        let img = sample();
+        let out = apply_exif_orientation(img.clone(), 1);
+        assert_eq!(out.to_rgb8(), img.to_rgb8());
+    }
+
+    #[test]
+    fn orientation_swaps_dimensions_for_rotations() {
+        let img = sample(); // 3×2
+        for o in [5u16, 6, 7, 8] {
+            let out = apply_exif_orientation(img.clone(), o);
+            assert_eq!((out.width(), out.height()), (2, 3), "orientation {o} should swap dims");
+        }
+        for o in [1u16, 2, 3, 4] {
+            let out = apply_exif_orientation(img.clone(), o);
+            assert_eq!((out.width(), out.height()), (3, 2), "orientation {o} keeps dims");
+        }
+    }
+
+    #[test]
+    fn orientation_3_is_self_inverse() {
+        let img = sample();
+        let twice = apply_exif_orientation(apply_exif_orientation(img.clone(), 3), 3);
+        assert_eq!(twice.to_rgb8(), img.to_rgb8());
+    }
 }

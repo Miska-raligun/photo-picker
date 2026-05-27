@@ -108,7 +108,8 @@ fn tenengrad_window(buf: &[u8], stride: usize, x: usize, y: usize, size: usize) 
 
 /// Variance of the 4-neighbor Laplacian over a grayscale region — a standard
 /// focus/sharpness measure. Exposed crate-wide so the face detector can reuse it
-/// on face crops (see `scoring::face_yunet`).
+/// on face crops (see `scoring::face_yunet`); only that ONNX-gated path uses it.
+#[cfg(feature = "onnx")]
 pub(crate) fn laplacian_variance(roi: &GrayImage) -> f32 {
     let (w, h) = (roi.width() as i32, roi.height() as i32);
     if w < 3 || h < 3 {

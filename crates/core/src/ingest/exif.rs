@@ -28,6 +28,25 @@ pub fn extract_exif_info(path: &Path) -> Result<ExifInfo, exif::Error> {
     Ok(ExifInfo { captured_at, burst_id, drive_mode, iso, exposure_bias_ev })
 }
 
+/// EXIF orientation (1–8) from the primary IFD; defaults to 1 (no transform)
+/// when absent or unreadable. Read at decode time so portrait-orientation shots
+/// are uprighted before scoring/face detection/display (the `image` crate does
+/// not auto-apply orientation on decode).
+pub fn read_orientation(path: &Path) -> u16 {
+    use exif::{In, Tag, Value};
+    let Ok(file) = File::open(path) else {
+        return 1;
+    };
+    let mut reader = BufReader::new(file);
+    let Ok(data) = exif::Reader::new().read_from_container(&mut reader) else {
+        return 1;
+    };
+    match data.get_field(Tag::Orientation, In::PRIMARY).map(|f| &f.value) {
+        Some(Value::Short(v)) => v.first().copied().filter(|o| (1..=8).contains(o)).unwrap_or(1),
+        _ => 1,
+    }
+}
+
 fn read_iso(data: &exif::Exif) -> Option<u32> {
     use exif::{In, Tag, Value};
     // ISOSpeedRatings (deprecated) and PhotographicSensitivity both stash ISO.
