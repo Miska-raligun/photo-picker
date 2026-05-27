@@ -20,6 +20,10 @@ use std::path::{Path, PathBuf};
 pub const DEFAULT_THUMB_LONG_EDGE: u32 = 480;
 pub const DEFAULT_THUMB_QUALITY: u8 = 78;
 
+/// Bumped when the rendering of a cached thumbnail changes (so stale files from
+/// older builds are ignored rather than served). v2: EXIF orientation applied.
+const THUMB_CACHE_VERSION: u32 = 2;
+
 /// Filesystem-backed thumb cache. Cheap to clone (just a `PathBuf`).
 #[derive(Debug, Clone)]
 pub struct ThumbDiskCache {
@@ -52,7 +56,11 @@ impl ThumbDiskCache {
     }
 
     fn path_for(&self, sha256_short: &[u8; 16]) -> PathBuf {
-        self.dir.join(format!("{}.jpg", hex::encode(sha256_short)))
+        // Versioned filename so a change in how thumbnails are rendered (e.g.
+        // EXIF orientation, v2) invalidates cached bytes from older builds
+        // instead of serving stale (sideways) images.
+        self.dir
+            .join(format!("{}.v{}.jpg", hex::encode(sha256_short), THUMB_CACHE_VERSION))
     }
 
     /// Read encoded JPEG bytes if present on disk.
