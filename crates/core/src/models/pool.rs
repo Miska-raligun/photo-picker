@@ -39,9 +39,11 @@ impl<T> SessionPool<T> {
         // index so different workers prefer different slots (avoids a thundering
         // herd on slot 0).
         let idx = rayon::current_thread_index().unwrap_or(0) % self.sessions.len();
+        // Recover rather than cascade-panic: if a worker panicked mid-inference
+        // and poisoned this slot, the session itself is still usable.
         let mut g = self.sessions[idx]
             .lock()
-            .expect("session pool mutex poisoned");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         f(&mut g)
     }
 

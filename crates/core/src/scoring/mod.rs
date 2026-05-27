@@ -98,6 +98,14 @@ pub fn face_bonus_score(face: &FaceInfo) -> f32 {
     face_bonus_score_with_sharp(face, &sharp)
 }
 
+/// An eye-open probability below this counts as *confidently* closed for the
+/// coverage gate. The detector's eye-open signal is an uncalibrated heuristic
+/// (Laplacian energy around an eye keypoint), so a soft or small but genuinely
+/// open eye can land in the ambiguous 0.3–0.5 band; treating that as "closed"
+/// would hard-cut the whole bonus via coverage. Only a clearly-low estimate
+/// triggers the penalty.
+const EYE_CLOSED_CONFIDENCE: f32 = 0.3;
+
 /// Like [`face_bonus_score`] but with per-face local sharpness supplied
 /// externally (already normalized to `[0,1]`), so a caller with group context
 /// can z-score face sharpness across the group instead of using the raw,
@@ -127,9 +135,10 @@ fn face_bonus_score_with_sharp(face: &FaceInfo, norm_sharp: &[Option<f32>]) -> f
             den += 0.1;
         }
         total += num / den;
-        // Unknown eye state (detector doesn't provide one, e.g. YuNet) must not
-        // count as closed — otherwise coverage hard-zeros the whole bonus.
-        if f.eye_open_prob.map_or(true, |p| p > 0.5) {
+        // Coverage gate: only a *confidently* closed eye counts against
+        // coverage. Unknown eye state (None) and ambiguous-but-not-low estimates
+        // count as open, so a noisy eye-open heuristic can't hard-zero the bonus.
+        if !f.eye_open_prob.is_some_and(|p| p < EYE_CLOSED_CONFIDENCE) {
             open_count += 1;
         }
     }
@@ -537,6 +546,17 @@ mod tests {
         let open = FaceInfo { faces: vec![face(0.1, Some(0.9)), face(0.1, Some(0.9))] };
         let one_closed = FaceInfo { faces: vec![face(0.1, Some(0.9)), face(0.1, Some(0.1))] };
         assert!(face_bonus_score(&one_closed) < face_bonus_score(&open));
+    }
+
+    #[test]
+    fn ambiguous_eye_open_is_not_hard_cut_by_coverage() {
+        // A soft/small but open eye lands in the uncalibrated 0.3–0.5 band; it
+        // must NOT trigger the coverage penalty the way a confidently-closed eye
+        // (single face, coverage → 0 → bonus 0) does.
+        let soft_open = FaceInfo { faces: vec![face(0.25, Some(0.4))] };
+        let confident_closed = FaceInfo { faces: vec![face(0.25, Some(0.1))] };
+        assert_eq!(face_bonus_score(&confident_closed), 0.0);
+        assert!(face_bonus_score(&soft_open) > 0.0);
     }
 
     #[test]

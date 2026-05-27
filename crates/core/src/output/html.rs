@@ -17,8 +17,11 @@ use std::io::Cursor;
 use std::path::Path;
 use std::time::Duration;
 
-const THUMB_LONG_EDGE: u32 = 256;
-const THUMB_JPEG_QUALITY: u8 = 70;
+// Match the disk thumb cache (see output::thumb_cache) so a warm cache hit and
+// a cold-fallback encode produce identical embedded images — otherwise a report
+// built from a populated cache looked different from one built without it.
+const THUMB_LONG_EDGE: u32 = super::DEFAULT_THUMB_LONG_EDGE;
+const THUMB_JPEG_QUALITY: u8 = super::DEFAULT_THUMB_QUALITY;
 
 pub fn write_html_report(
     path: &Path,
