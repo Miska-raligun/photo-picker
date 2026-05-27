@@ -23,4 +23,4 @@ pub use cache::{ensure_model, ModelDescriptor};
 pub use clip::{ClipEncoder, CLIP_EMBED_DIM};
 #[cfg(feature = "onnx")]
 pub use pool::{default_size as default_pool_size, SessionPool};
-pub use registry::ExecutionProvider;
+pub use registry::{available_providers, ExecutionProvider};

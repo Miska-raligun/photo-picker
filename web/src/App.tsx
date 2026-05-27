@@ -227,36 +227,44 @@ export default function App() {
           )}
         </main>
 
-        <RunDetailDialog
-          open={detailRunId !== null}
-          onOpenChange={(v) => !v && setDetailRunId(null)}
-          run={detailRun}
-          overrides={detailRunId ? getOverrides(detailRunId) : new Set()}
-          onOpenGroup={(idx) => {
-            setGroupRun(detailRunId);
-            setGroupIdx(idx);
-          }}
-          onApplyDone={() => detailRunId && subscribeProgress(detailRunId)}
-        />
+        {/* Wrap each dialog in its own ErrorBoundary: a malformed run record
+            or a render bug inside the detail / group view would otherwise
+            white-screen the entire app. resetKey rebinds the boundary when
+            the underlying run changes so users can recover by re-opening. */}
+        <ErrorBoundary resetKey={detailRunId ?? "none"}>
+          <RunDetailDialog
+            open={detailRunId !== null}
+            onOpenChange={(v) => !v && setDetailRunId(null)}
+            run={detailRun}
+            overrides={detailRunId ? getOverrides(detailRunId) : new Set()}
+            onOpenGroup={(idx) => {
+              setGroupRun(detailRunId);
+              setGroupIdx(idx);
+            }}
+            onApplyDone={() => detailRunId && subscribeProgress(detailRunId)}
+          />
+        </ErrorBoundary>
 
-        <GroupDetailDialog
-          open={groupRun !== null && groupIdx !== null}
-          onOpenChange={(v) => {
-            if (!v) {
-              setGroupRun(null);
-              setGroupIdx(null);
+        <ErrorBoundary resetKey={`${groupRun ?? "none"}:${groupIdx ?? "none"}`}>
+          <GroupDetailDialog
+            open={groupRun !== null && groupIdx !== null}
+            onOpenChange={(v) => {
+              if (!v) {
+                setGroupRun(null);
+                setGroupIdx(null);
+              }
+            }}
+            runId={groupRun}
+            pickIndex={groupIdx}
+            overrides={groupRun ? getOverrides(groupRun) : new Set()}
+            inPlace={groupRunRecord?.in_place ?? false}
+            vlmSettings={vlmSettings}
+            onOpenSettings={() => setSettingsOpen(true)}
+            onToggleOverride={(photoId) =>
+              groupRun && toggleOverride(groupRun, photoId)
             }
-          }}
-          runId={groupRun}
-          pickIndex={groupIdx}
-          overrides={groupRun ? getOverrides(groupRun) : new Set()}
-          inPlace={groupRunRecord?.in_place ?? false}
-          vlmSettings={vlmSettings}
-          onOpenSettings={() => setSettingsOpen(true)}
-          onToggleOverride={(photoId) =>
-            groupRun && toggleOverride(groupRun, photoId)
-          }
-        />
+          />
+        </ErrorBoundary>
 
         <SettingsDialog
           open={settingsOpen}

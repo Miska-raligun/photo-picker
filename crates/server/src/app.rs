@@ -14,6 +14,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/browse", get(handlers::browse))
         .route("/api/scan", post(handlers::scan))
         .route("/api/runs", get(handlers::list_runs))
+        .route("/api/providers", get(handlers::list_providers))
         .route("/api/runs/:id", get(handlers::get_run))
         .route("/api/runs/:id/events", get(handlers::run_events))
         .route("/api/runs/:id/html", get(handlers::get_run_html))

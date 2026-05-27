@@ -1,6 +1,7 @@
 import type {
   ApplyResult,
   BrowseResponse,
+  ExecutionProvider,
   ExplanationRecord,
   RunRecord,
   ScanRequest,
@@ -37,6 +38,13 @@ export const api = {
 
   async listRuns(): Promise<RunRecord[]> {
     return request("/api/runs");
+  },
+
+  /// Which ONNX execution providers this server build actually has. The UI
+  /// uses the result to hide GPU options that would silently fall back to
+  /// CPU. CPU is always present.
+  async listProviders(): Promise<{ providers: ExecutionProvider[] }> {
+    return request("/api/providers");
   },
 
   async getRun(id: string): Promise<RunRecord> {

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Loader2, Play } from "lucide-react";
 import {
   Dialog,
@@ -22,6 +22,7 @@ import {
 import { FieldHelp } from "./FieldHelp";
 import { SliderInput } from "./SliderInput";
 import { api } from "@/lib/api";
+import type { ExecutionProvider } from "@/lib/types";
 import { useM } from "@/lib/i18n";
 import { toast } from "sonner";
 
@@ -60,10 +61,35 @@ export function TaskConfigDialog({
   const [adaptiveThresholds, setAdaptiveThresholds] = useState(true);
   const [linkMode, setLinkMode] = useState<"copy" | "hardlink" | "symlink">("hardlink");
   const [thumbLongEdge, setThumbLongEdge] = useState(1024);
-  const [executionProvider, setExecutionProvider] = useState<
-    "cpu" | "cuda" | "coreml" | "directml"
-  >("cpu");
+  const [executionProvider, setExecutionProvider] = useState<ExecutionProvider>("cpu");
+  // Providers actually compiled into this server build. Defaults to ["cpu"]
+  // until the capability call resolves so we never offer a phantom GPU. If
+  // the endpoint fails we leave it at CPU-only rather than silently showing
+  // options that would fall back.
+  const [availableProviders, setAvailableProviders] = useState<ExecutionProvider[]>(["cpu"]);
   const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    api
+      .listProviders()
+      .then((r) => {
+        if (cancelled) return;
+        const list: ExecutionProvider[] =
+          r.providers.length > 0 ? r.providers : ["cpu"];
+        setAvailableProviders(list);
+        // If the currently-selected provider isn't available, reset to CPU.
+        setExecutionProvider((prev) => (list.includes(prev) ? prev : "cpu"));
+      })
+      .catch(() => {
+        // Endpoint missing / unreachable — be conservative.
+        if (!cancelled) setAvailableProviders(["cpu"]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
 
   async function start() {
     setSubmitting(true);
@@ -284,17 +310,25 @@ export function TaskConfigDialog({
               <Select
                 value={executionProvider}
                 onValueChange={(v) =>
-                  setExecutionProvider(v as typeof executionProvider)
+                  setExecutionProvider(v as ExecutionProvider)
                 }
               >
                 <SelectTrigger className="text-sm w-full">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="cpu">CPU</SelectItem>
-                  <SelectItem value="cuda">CUDA (NVIDIA)</SelectItem>
-                  <SelectItem value="coreml">CoreML (macOS)</SelectItem>
-                  <SelectItem value="directml">DirectML (Windows)</SelectItem>
+                  {availableProviders.includes("cpu") && (
+                    <SelectItem value="cpu">CPU</SelectItem>
+                  )}
+                  {availableProviders.includes("cuda") && (
+                    <SelectItem value="cuda">CUDA (NVIDIA)</SelectItem>
+                  )}
+                  {availableProviders.includes("coreml") && (
+                    <SelectItem value="coreml">CoreML (macOS)</SelectItem>
+                  )}
+                  {availableProviders.includes("directml") && (
+                    <SelectItem value="directml">DirectML (Windows)</SelectItem>
+                  )}
                 </SelectContent>
               </Select>
             </FieldHelp>

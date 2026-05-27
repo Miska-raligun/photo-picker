@@ -81,8 +81,10 @@ export interface ScanRequest {
   adaptive_thresholds?: boolean;
   link_mode?: "copy" | "hardlink" | "symlink";
   thumbnail_long_edge?: number;
-  execution_provider?: "cpu" | "cuda" | "coreml" | "directml";
+  execution_provider?: ExecutionProvider;
 }
+
+export type ExecutionProvider = "cpu" | "cuda" | "coreml" | "directml";
 
 /// Live progress event delivered over SSE from `/api/runs/:id/events`.
 /// `Done` is terminal — the server drops the channel right after.

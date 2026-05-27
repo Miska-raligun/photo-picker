@@ -23,6 +23,25 @@ impl Default for ExecutionProvider {
     }
 }
 
+/// List the execution providers actually compiled into this build. CPU is
+/// always present; GPU variants are gated by cargo features. Used by the
+/// server's `/api/providers` capability endpoint so the UI only offers
+/// providers that won't silently fall back to CPU.
+pub fn available_providers() -> Vec<ExecutionProvider> {
+    // `mut` is needed iff any GPU feature is compiled in; in the common
+    // CPU-only build the push calls disappear under cfg and the binding
+    // would trip unused_mut.
+    #[allow(unused_mut)]
+    let mut out = vec![ExecutionProvider::Cpu];
+    #[cfg(feature = "cuda")]
+    out.push(ExecutionProvider::Cuda);
+    #[cfg(feature = "coreml")]
+    out.push(ExecutionProvider::CoreMl);
+    #[cfg(feature = "directml")]
+    out.push(ExecutionProvider::DirectMl);
+    out
+}
+
 /// Build a Session for an ONNX model, configuring the requested provider.
 /// Falls back to CPU with a warning when the requested provider isn't
 /// compiled in or fails to initialize.

@@ -293,11 +293,15 @@ impl AppState {
     }
 
     /// Register a new run + enforce the LRU cap. Evicts non-running records
-    /// from the oldest end until we're at or below `max_runs`.
+    /// from the oldest end until we're at or below `max_runs`. Also drops the
+    /// run's `progress_streams` entry — otherwise the channel + replay buffer
+    /// outlive the `RunRecord` until the 10s SSE tail task fires, which under
+    /// churn leaks memory proportional to scans-per-10s.
     pub async fn insert_run(&self, record: RunRecord) {
         let id = record.id.clone();
         let mut runs = self.runs.lock().await;
         let mut order = self.run_order.lock().await;
+        let mut streams = self.progress_streams.lock().await;
         runs.insert(id.clone(), record);
         order.push_back(id);
         while runs.len() > self.max_runs {
@@ -316,6 +320,7 @@ impl AppState {
                 continue;
             }
             runs.remove(&victim);
+            streams.remove(&victim);
         }
     }
 }

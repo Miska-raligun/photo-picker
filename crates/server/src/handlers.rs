@@ -555,6 +555,21 @@ pub async fn list_runs(State(state): State<AppState>) -> Json<serde_json::Value>
     Json(serde_json::to_value(runs).unwrap())
 }
 
+/// Capability endpoint: which ONNX execution providers are actually compiled
+/// into this build. The UI uses this to filter the provider dropdown so a
+/// user on a CPU-only build doesn't pick "CUDA" and silently fall back.
+pub async fn list_providers() -> Json<serde_json::Value> {
+    use photo_pick_core::models::{available_providers, ExecutionProvider};
+    let to_str = |ep: ExecutionProvider| match ep {
+        ExecutionProvider::Cpu => "cpu",
+        ExecutionProvider::Cuda => "cuda",
+        ExecutionProvider::CoreMl => "coreml",
+        ExecutionProvider::DirectMl => "directml",
+    };
+    let providers: Vec<&'static str> = available_providers().into_iter().map(to_str).collect();
+    Json(serde_json::json!({ "providers": providers }))
+}
+
 #[derive(Debug, Deserialize)]
 pub struct ExplainRequest {
     /// Index into the run's composition_picks vector.
