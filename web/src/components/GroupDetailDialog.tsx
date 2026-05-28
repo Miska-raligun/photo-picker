@@ -1,5 +1,13 @@
 import { memo, useEffect, useMemo, useState } from "react";
-import { Loader2, Maximize2, Settings as SettingsIcon, Sparkles } from "lucide-react";
+import {
+  ChevronLeft,
+  ChevronRight,
+  ImageOff,
+  Loader2,
+  Maximize2,
+  Settings as SettingsIcon,
+  Sparkles,
+} from "lucide-react";
 import { motion, useReducedMotion } from "motion/react";
 import { Lightbox } from "./Lightbox";
 import { Thumb } from "./Thumb";
@@ -36,6 +44,11 @@ interface Props {
   onOpenChange: (v: boolean) => void;
   runId: string | null;
   pickIndex: number | null;
+  /// Total number of composition groups in this run — drives the prev/next
+  /// position indicator and disables the controls at either end.
+  groupCount: number;
+  /// Step to an adjacent group (delta ±1) without closing the dialog.
+  onNavigate: (delta: number) => void;
   /// Set of photo ids whose algorithmic verdict the user has flipped.
   /// A flipped kept→drop. A flipped rejected→keep.
   overrides: Set<string>;
@@ -50,6 +63,8 @@ export function GroupDetailDialog({
   onOpenChange,
   runId,
   pickIndex,
+  groupCount,
+  onNavigate,
   overrides,
   inPlace,
   vlmSettings,
@@ -86,6 +101,35 @@ export function GroupDetailDialog({
   const pick: CompositionPickView | undefined =
     pickIndex == null ? undefined : run?.composition_picks?.[pickIndex];
 
+  // Switching groups must drop the previous group's explanation so a stale
+  // VLM answer doesn't appear attached to the new group.
+  useEffect(() => {
+    setVlmResult(null);
+    setVlmError(null);
+  }, [pickIndex]);
+
+  const canPrev = pickIndex != null && pickIndex > 0;
+  const canNext = pickIndex != null && pickIndex < groupCount - 1;
+
+  // ←/→ step between groups. Skip when the lightbox is open (it owns arrows for
+  // panning) or focus sits in a form control (provider <select>, etc.).
+  useEffect(() => {
+    if (!open || lightbox) return;
+    const onKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement | null)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if (e.key === "ArrowLeft" && canPrev) {
+        e.preventDefault();
+        onNavigate(-1);
+      } else if (e.key === "ArrowRight" && canNext) {
+        e.preventDefault();
+        onNavigate(1);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, lightbox, canPrev, canNext, onNavigate]);
+
   async function askVlm() {
     if (!runId || pickIndex == null) return;
     setVlmLoading(true);
@@ -116,11 +160,13 @@ export function GroupDetailDialog({
   const aiAnnotations = useMemo<Map<number, Ann> | null>(() => {
     if (!vlmResult) return null;
     const map = new Map<number, Ann>();
+    // The separator class tolerates markdown/paren noise the model often emits
+    // around the bracket, e.g. `**Rank 1 (Image 2)**:` or `Rank 1 (Image 2) —`.
     const patterns = [
       // Rank-first
-      /(?:Rank|排名|第)\s*[#]?\s*(\d+)[^\n]{0,40}?Image\s*[#]?\s*(\d+)\s*\)?\s*[:\-—–]\s*([^\n]+)/gi,
+      /(?:Rank|排名|第)\s*[#]?\s*(\d+)[^\n]{0,40}?Image\s*[#]?\s*(\d+)[\s)*_]*[:\-—–]\s*([^\n]+)/gi,
       // Image-first
-      /Image\s*[#]?\s*(\d+)[^\n]{0,40}?(?:Rank|排名|第)\s*[#]?\s*(\d+)\s*\)?\s*[:\-—–]\s*([^\n]+)/gi,
+      /Image\s*[#]?\s*(\d+)[^\n]{0,40}?(?:Rank|排名|第)\s*[#]?\s*(\d+)[\s)*_]*[:\-—–]\s*([^\n]+)/gi,
     ];
     for (let pi = 0; pi < patterns.length; pi++) {
       const re = patterns[pi];
@@ -128,7 +174,7 @@ export function GroupDetailDialog({
       while ((match = re.exec(vlmResult.text)) !== null) {
         const a = parseInt(match[1]);
         const b = parseInt(match[2]);
-        const reason = match[3]?.trim() ?? "";
+        const reason = (match[3] ?? "").replace(/^[\s*_]+|[\s*_]+$/g, "");
         if (Number.isNaN(a) || Number.isNaN(b)) continue;
         // pi=0 → (rank, image). pi=1 → (image, rank).
         const [rank, imageNum] = pi === 0 ? [a, b] : [b, a];
@@ -153,7 +199,39 @@ export function GroupDetailDialog({
       <DialogContent className="!max-w-[98vw] sm:!max-w-[96vw] !w-[96vw] !h-[94vh] max-h-[94vh] gap-0 p-0 grid grid-rows-[auto_minmax(0,1fr)_auto]">
         <DialogHeader className="px-6 pt-5 pb-3 border-b">
           <DialogTitle className="flex items-center gap-2 text-base">
-            <span>#{pickIndex}</span>
+            <div className="flex items-center gap-1 mr-1">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7"
+                disabled={!canPrev}
+                onClick={() => onNavigate(-1)}
+                aria-label={m.detail.prevGroup}
+                title={m.detail.prevGroup}
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7"
+                disabled={!canNext}
+                onClick={() => onNavigate(1)}
+                aria-label={m.detail.nextGroup}
+                title={m.detail.nextGroup}
+              >
+                <ChevronRight className="h-4 w-4" />
+              </Button>
+            </div>
+            <span className="tabular-nums">
+              #{pickIndex}
+              {groupCount > 0 && (
+                <span className="text-muted-foreground font-normal text-sm">
+                  {" "}
+                  · {(pickIndex ?? 0) + 1}/{groupCount}
+                </span>
+              )}
+            </span>
             {pick && (
               <>
                 <Badge variant="outline" className="text-[0.65rem] font-normal">
@@ -203,6 +281,12 @@ export function GroupDetailDialog({
               </div>
               <ScrollBar orientation="horizontal" />
             </ScrollArea>
+          )}
+          {!loading && (!pick || !runId) && (
+            <div className="flex-1 flex flex-col items-center justify-center gap-3 text-muted-foreground py-12">
+              <ImageOff className="h-8 w-8 opacity-50" />
+              <span className="text-sm">{m.detail.groupUnavailable}</span>
+            </div>
           )}
         </div>
 

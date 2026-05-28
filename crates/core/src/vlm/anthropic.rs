@@ -101,6 +101,9 @@ impl VlmProvider for AnthropicProvider {
         let agent: ureq::Agent = ureq::Agent::config_builder()
             .timeout_global(Some(Duration::from_secs(180)))
             .proxy(ureq::Proxy::try_from_env())
+            // See OpenAI provider: keep 4xx/5xx responses so the body's error
+            // message reaches the user instead of a bare status code.
+            .http_status_as_error(false)
             .build()
             .into();
 
@@ -114,11 +117,22 @@ impl VlmProvider for AnthropicProvider {
                 tracing::warn!(elapsed_ms = start.elapsed().as_millis() as u64, %e, "vlm anthropic request failed");
                 Error::Config(format!("anthropic request: {e}"))
             })?;
+        let status = resp.status();
         tracing::info!(
             elapsed_ms = start.elapsed().as_millis() as u64,
-            status = resp.status().as_u16(),
+            status = status.as_u16(),
             "vlm anthropic response"
         );
+        if !status.is_success() {
+            let body = resp.body_mut().read_to_string().unwrap_or_default();
+            let snippet: String = body.trim().chars().take(500).collect();
+            tracing::warn!(status = status.as_u16(), body = %snippet, "vlm anthropic error response");
+            return Err(Error::Config(format!(
+                "anthropic HTTP {}: {}",
+                status.as_u16(),
+                if snippet.is_empty() { "(empty body)" } else { &snippet }
+            )));
+        }
 
         let parsed: MessagesResponse = resp
             .body_mut()

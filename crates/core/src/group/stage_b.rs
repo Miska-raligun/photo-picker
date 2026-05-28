@@ -68,7 +68,12 @@ pub fn cluster_stage_b(
         buckets.entry(uf.find(i)).or_default().push(i);
     }
 
-    // Pass 2: split chains via centroid distance.
+    // Pass 2: split chains via centroid distance. Iterative — peel the single
+    // worst member below `split_threshold`, then recompute the centroid over
+    // the survivors and repeat. A one-shot pass uses the *original* (chain-
+    // contaminated) centroid, so a long A~B~C~D chain can leave residual
+    // outliers in the core; recomputing after each peel tightens the cluster
+    // until every survivor is genuinely close to the group it ends up in.
     let split_threshold = (params.similarity_threshold - params.chain_margin).max(0.0);
     let mut groups: Vec<Vec<PhotoId>> = Vec::new();
     for (_, indices) in buckets {
@@ -77,35 +82,29 @@ pub fn cluster_stage_b(
             continue;
         }
 
-        // Compute L2-normalized centroid of the member embeddings.
-        let dim = kept_with_embeds[indices[0]].1.len();
-        let mut centroid = vec![0.0_f32; dim];
-        for &i in &indices {
-            for (j, v) in kept_with_embeds[i].1.iter().enumerate() {
-                centroid[j] += v;
+        let mut core = indices.clone();
+        loop {
+            if core.len() <= 1 {
+                break;
             }
-        }
-        let m = indices.len() as f32;
-        for v in centroid.iter_mut() {
-            *v /= m;
-        }
-        let norm: f32 = centroid.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-8);
-        for v in centroid.iter_mut() {
-            *v /= norm;
-        }
-
-        let mut core: Vec<PhotoId> = Vec::new();
-        for &i in &indices {
-            let sim = cosine_normalized(&centroid, &kept_with_embeds[i].1);
-            if sim >= split_threshold {
-                core.push(kept_with_embeds[i].0);
-            } else {
-                groups.push(vec![kept_with_embeds[i].0]);
+            let centroid = l2_centroid(&core, kept_with_embeds);
+            // Find the member least aligned with the current centroid.
+            let mut worst_pos = 0usize;
+            let mut worst_sim = f32::INFINITY;
+            for (pos, &i) in core.iter().enumerate() {
+                let sim = cosine_normalized(&centroid, &kept_with_embeds[i].1);
+                if sim < worst_sim {
+                    worst_sim = sim;
+                    worst_pos = pos;
+                }
             }
+            if worst_sim >= split_threshold {
+                break; // every survivor is cohesive — done
+            }
+            let outlier = core.swap_remove(worst_pos);
+            groups.push(vec![kept_with_embeds[outlier].0]);
         }
-        if !core.is_empty() {
-            groups.push(core);
-        }
+        groups.push(core.iter().map(|i| kept_with_embeds[*i].0).collect());
     }
 
     groups
@@ -115,6 +114,26 @@ pub fn cluster_stage_b(
             photo_ids: ids,
         })
         .collect()
+}
+
+/// L2-normalized mean of the embeddings at `indices`.
+fn l2_centroid(indices: &[usize], kept_with_embeds: &[(PhotoId, Vec<f32>)]) -> Vec<f32> {
+    let dim = kept_with_embeds[indices[0]].1.len();
+    let mut centroid = vec![0.0_f32; dim];
+    for &i in indices {
+        for (j, v) in kept_with_embeds[i].1.iter().enumerate() {
+            centroid[j] += v;
+        }
+    }
+    let m = indices.len() as f32;
+    for v in centroid.iter_mut() {
+        *v /= m;
+    }
+    let norm: f32 = centroid.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-8);
+    for v in centroid.iter_mut() {
+        *v /= norm;
+    }
+    centroid
 }
 
 #[cfg(test)]
@@ -197,5 +216,39 @@ mod tests {
             "chaining guard should split at least one outlier; got {} groups",
             groups.len()
         );
+    }
+
+    #[test]
+    fn iterative_refinement_peels_residual_outliers() {
+        // A tight core of three near-identical embeddings plus two progressively
+        // drifting members linked in via a chain. A single-pass centroid (biased
+        // by the drifters) could keep the milder drifter; iterating recomputes
+        // the centroid over the tightening core and peels both.
+        let core1 = normed(&[1.0, 0.02, 0.0, 0.0]);
+        let core2 = normed(&[1.0, 0.03, 0.0, 0.0]);
+        let core3 = normed(&[1.0, 0.04, 0.0, 0.0]);
+        let drift1 = normed(&[0.80, 0.55, 0.20, 0.0]);
+        let drift2 = normed(&[0.55, 0.70, 0.45, 0.10]);
+        let ids: Vec<PhotoId> = (0..5).map(|_| PhotoId::new()).collect();
+        let groups = cluster_stage_b(
+            &[
+                (ids[0], core1),
+                (ids[1], core2),
+                (ids[2], core3),
+                (ids[3], drift1),
+                (ids[4], drift2),
+            ],
+            &StageBParams { similarity_threshold: 0.90, chain_margin: 0.05 },
+        );
+        // The three tight members must stay together in one group; the two
+        // drifters must not be in that group.
+        let core_group = groups
+            .iter()
+            .find(|g| g.photo_ids.contains(&ids[0]))
+            .expect("core group exists");
+        assert!(core_group.photo_ids.contains(&ids[1]));
+        assert!(core_group.photo_ids.contains(&ids[2]));
+        assert!(!core_group.photo_ids.contains(&ids[3]));
+        assert!(!core_group.photo_ids.contains(&ids[4]));
     }
 }
