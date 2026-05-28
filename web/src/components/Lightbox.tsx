@@ -279,6 +279,14 @@ export function Lightbox({ open, onOpenChange, previewUrl, thumbUrl, filename }:
                 className="absolute max-w-[96vw] max-h-[88vh] object-contain rounded-md shadow-2xl blur-md scale-105 opacity-90 pointer-events-none"
               />
             )}
+            {/* No thumbnail to blur-up yet: soft shimmer placeholder so the
+                preview never opens to an empty void. */}
+            {!loaded && !errored && !thumbUrl && (
+              <div
+                aria-hidden
+                className="shimmer absolute w-[60vw] h-[70vh] max-w-[96vw] max-h-[88vh] rounded-md opacity-20"
+              />
+            )}
             {errored && (
               <div className="text-white/80 text-sm font-mono bg-black/40 px-3 py-2 rounded">
                 {m.detail.previewFailed ?? "failed to load preview"}

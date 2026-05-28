@@ -1,5 +1,6 @@
 import { memo, useEffect, useMemo, useState } from "react";
 import { Loader2, Maximize2, Settings as SettingsIcon, Sparkles } from "lucide-react";
+import { motion, useReducedMotion } from "motion/react";
 import { Lightbox } from "./Lightbox";
 import { Thumb } from "./Thumb";
 import {
@@ -371,6 +372,7 @@ function ScoreBar({
   dominant: boolean;
 }) {
   const pct = Math.max(0, Math.min(100, value * 100));
+  const reduce = useReducedMotion();
   return (
     <div className="flex items-center gap-2 text-[0.7rem] font-mono">
       <span
@@ -381,15 +383,17 @@ function ScoreBar({
         {label}
       </span>
       <div className="flex-1 h-1.5 rounded-full bg-muted overflow-hidden">
-        <div
-          className={`h-full transition-[width] ${
+        <motion.div
+          className={`h-full ${
             disabled
               ? "bg-muted-foreground/20"
               : dominant
               ? "bg-primary"
               : "bg-foreground/40"
           }`}
-          style={{ width: `${pct}%` }}
+          initial={reduce ? false : { width: 0 }}
+          animate={{ width: `${pct}%` }}
+          transition={{ duration: 0.45, ease: [0.22, 0.6, 0.36, 1] }}
         />
       </div>
       <span
