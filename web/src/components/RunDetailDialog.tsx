@@ -103,9 +103,22 @@ export function RunDetailDialog({
           )}
 
           {isRunning && (
-            <div className="flex items-center justify-center gap-2 text-muted-foreground py-12 border border-dashed rounded-xl">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              <span className="text-sm">{m.runCard.scanInProgress}…</span>
+            <div className="space-y-3">
+              <div className="flex items-center gap-2 text-muted-foreground text-sm">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                <span>{m.runCard.scanInProgress}…</span>
+              </div>
+              {/* Skeleton group strip so the dialog isn't empty while the
+                  scan runs — uses the shimmer keyframe from the friendly-UI PR. */}
+              <div className="flex gap-6 py-1 overflow-hidden">
+                {Array.from({ length: 6 }).map((_, i) => (
+                  <div key={i} className="shrink-0 w-44">
+                    <div className="h-32 w-40 mx-auto rounded-lg shimmer" />
+                    <div className="mt-4 mx-auto h-3 w-24 rounded shimmer" />
+                    <div className="mt-2 mx-auto h-3 w-28 rounded shimmer" />
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 

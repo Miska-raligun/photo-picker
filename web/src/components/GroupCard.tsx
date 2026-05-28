@@ -3,6 +3,7 @@ import { cn } from "@/lib/utils";
 import type { CompositionPickView } from "@/lib/types";
 import { api } from "@/lib/api";
 import { useM } from "@/lib/i18n";
+import { Thumb } from "./Thumb";
 
 interface Props {
   runId: string;
@@ -36,14 +37,7 @@ function GroupCardImpl({ runId, pick, overrides, onClick }: Props) {
           <div className="absolute inset-0 rounded-lg border border-border bg-card shadow-sm rotate-[2.5deg] translate-x-[6px] translate-y-[5px]" />
         )}
         <div className="absolute inset-0 rounded-lg border border-border overflow-hidden bg-muted shadow-md z-10">
-          {thumb && (
-            <img
-              loading="lazy"
-              src={thumb}
-              alt=""
-              className="w-full h-full object-cover"
-            />
-          )}
+          {thumb && <Thumb src={thumb} />}
         </div>
         <span className="absolute z-20 top-2 right-2 bg-foreground/80 text-background text-[0.7rem] font-semibold font-mono px-2 py-0.5 rounded-full tabular-nums">
           {total}

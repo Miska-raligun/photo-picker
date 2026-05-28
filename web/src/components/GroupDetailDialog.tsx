@@ -1,6 +1,7 @@
 import { memo, useEffect, useMemo, useState } from "react";
 import { Loader2, Maximize2, Settings as SettingsIcon, Sparkles } from "lucide-react";
 import { Lightbox } from "./Lightbox";
+import { Thumb } from "./Thumb";
 import {
   Dialog,
   DialogContent,
@@ -487,11 +488,9 @@ function PhotoCardImpl({
       }
     >
       <div className="relative aspect-[4/3] bg-muted">
-        <img
-          loading="lazy"
+        <Thumb
           src={api.thumbUrl(runId, photo.photo_id)}
           alt={photo.filename ?? ""}
-          className="w-full h-full object-cover"
         />
         <Badge
           className={cn(
