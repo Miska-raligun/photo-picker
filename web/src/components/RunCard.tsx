@@ -1,4 +1,17 @@
-import { ArrowRight, Loader2, AlertCircle, CheckCircle2 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
+import {
+  AlertCircle,
+  ArrowRight,
+  CheckCircle2,
+  Clock,
+  Database,
+  FolderClosed,
+  Images,
+  Layers,
+  LayoutGrid,
+  Loader2,
+  XCircle,
+} from "lucide-react";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -51,8 +64,9 @@ export function RunCard({ run, progress, onOpenDetail }: Props) {
   return (
     <Card
       className={cn(
-        "transition-shadow",
-        state === "completed" && "cursor-pointer hover:shadow-md"
+        "transition-all duration-200",
+        state === "completed" &&
+          "cursor-pointer hover:shadow-md hover:-translate-y-0.5 hover:border-primary/20"
       )}
       onClick={() => state === "completed" && onOpenDetail()}
     >
@@ -69,8 +83,11 @@ export function RunCard({ run, progress, onOpenDetail }: Props) {
             </Badge>
           )}
         </div>
-        <div className="text-xs font-mono text-muted-foreground break-all">
-          {run.root} <span className="text-foreground">→</span> {run.output}
+        <div className="flex items-center gap-1.5 text-xs text-muted-foreground min-w-0">
+          <FolderClosed className="h-3.5 w-3.5 shrink-0" />
+          <span className="font-mono truncate">{run.root}</span>
+          <ArrowRight className="h-3 w-3 shrink-0 text-foreground/60" />
+          <span className="font-mono truncate">{run.output}</span>
         </div>
       </CardHeader>
 
@@ -105,26 +122,36 @@ export function RunCard({ run, progress, onOpenDetail }: Props) {
 
         {report && (
           <div className="flex flex-wrap gap-1.5">
-            <StatPill label={m.runCard.statPhotos} value={report.photo_count} />
+            <StatPill icon={Images} label={m.runCard.statPhotos} value={report.photo_count} />
             <StatPill
+              icon={Database}
               label={m.runCard.statCache}
               value={`${report.cached_count}/${report.photo_count}`}
               accent={report.cached_count > 0 ? "success" : undefined}
             />
             <StatPill
+              icon={Layers}
               label={m.runCard.statBursts}
               value={report.stage_a_group_count}
             />
             <StatPill
+              icon={LayoutGrid}
               label={m.runCard.statCompGroups}
               value={report.stage_b_group_count}
             />
-            <StatPill label={m.runCard.statKept} value={report.picked_count} />
             <StatPill
+              icon={CheckCircle2}
+              label={m.runCard.statKept}
+              value={report.picked_count}
+              accent="success"
+            />
+            <StatPill
+              icon={XCircle}
               label={m.runCard.statRejected}
               value={report.rejected_count}
             />
             <StatPill
+              icon={Clock}
               label={m.runCard.statElapsed}
               value={`${(report.elapsed.secs + report.elapsed.nanos / 1e9).toFixed(2)}s`}
             />
@@ -158,10 +185,12 @@ export function RunCard({ run, progress, onOpenDetail }: Props) {
 }
 
 function StatPill({
+  icon: Icon,
   label,
   value,
   accent,
 }: {
+  icon: LucideIcon;
   label: string;
   value: string | number;
   accent?: "success";
@@ -170,9 +199,15 @@ function StatPill({
     <div
       className={cn(
         "inline-flex items-center gap-1.5 rounded-md border bg-muted/50 px-2.5 py-1 text-xs",
-        accent === "success" && "border-[var(--success)]"
+        accent === "success" && "border-[var(--success)]/40 bg-[var(--success)]/5"
       )}
     >
+      <Icon
+        className={cn(
+          "h-3.5 w-3.5",
+          accent === "success" ? "text-[var(--success)]" : "text-muted-foreground"
+        )}
+      />
       <span className="text-muted-foreground">{label}</span>
       <span className="font-semibold tabular-nums">{value}</span>
     </div>

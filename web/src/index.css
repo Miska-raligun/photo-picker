@@ -127,3 +127,39 @@
   50%  { transform: translateX(150%); }
   100% { transform: translateX(-100%); }
 }
+
+/* Soft horizontal sheen for skeleton placeholders (thumbnail/preview loaders).
+   Tasteful, low-contrast; respects reduced motion below. */
+@keyframes shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position:  200% 0; }
+}
+.shimmer {
+  background: linear-gradient(
+    90deg,
+    var(--muted) 0%,
+    color-mix(in oklch, var(--muted) 70%, var(--card)) 50%,
+    var(--muted) 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.6s ease-in-out infinite;
+}
+
+/* Warm radial wash behind the app shell — gives the page a soft visual anchor
+   without competing with content. Both themes get their own gradient. */
+.app-shell {
+  background:
+    radial-gradient(60% 50% at 50% 0%,
+      color-mix(in oklch, var(--accent) 35%, transparent) 0%,
+      transparent 60%),
+    var(--background);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shimmer { animation: none; }
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}

@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Settings as SettingsIcon } from "lucide-react";
+import { Aperture, Images, Settings as SettingsIcon } from "lucide-react";
 import { ScanForm } from "./components/ScanForm";
 import { RunCard } from "./components/RunCard";
 import { RunDetailDialog } from "./components/RunDetailDialog";
 import { GroupDetailDialog } from "./components/GroupDetailDialog";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { LanguageToggle } from "./components/LanguageToggle";
+import { ThemeToggle } from "./components/ThemeToggle";
 import { ErrorBoundary } from "./components/ErrorBoundary";
+import { FadeUp } from "./components/Motion";
 import { Button } from "./components/ui/button";
 import { Toaster } from "./components/ui/sonner";
 import { api } from "./lib/api";
@@ -177,18 +179,24 @@ export default function App() {
 
   return (
     <I18nContext.Provider value={{ lang, setLang, m }}>
-      <div className="min-h-screen">
+      <div className="app-shell min-h-screen">
         <main className="max-w-5xl mx-auto px-6 pt-10 pb-20">
           <header className="mb-10 flex items-start justify-between gap-4">
-            <div>
-              <h1 className="text-3xl font-semibold tracking-tight">
-                {m.common.appName}
-              </h1>
-              <p className="text-muted-foreground mt-2 text-sm">
-                {m.common.tagline}
-              </p>
+            <div className="flex items-center gap-3">
+              <span className="grid place-items-center h-11 w-11 rounded-xl bg-primary/10 text-primary ring-1 ring-primary/15 shadow-sm">
+                <Aperture className="h-6 w-6" />
+              </span>
+              <div>
+                <h1 className="text-3xl font-semibold tracking-tight">
+                  {m.common.appName}
+                </h1>
+                <p className="text-muted-foreground mt-1 text-sm max-w-xl">
+                  {m.common.tagline}
+                </p>
+              </div>
             </div>
             <div className="flex items-center gap-1">
+              <ThemeToggle />
               <Button
                 variant="ghost"
                 size="sm"
@@ -209,19 +217,26 @@ export default function App() {
           </div>
 
           {runs.length === 0 ? (
-            <div className="rounded-xl border border-dashed text-center text-muted-foreground italic text-sm py-12">
-              {m.common.emptyRuns}
-            </div>
+            <FadeUp className="rounded-xl border border-dashed bg-card/40 py-14 px-6 flex flex-col items-center text-center gap-3">
+              <span className="grid place-items-center h-12 w-12 rounded-full bg-muted text-muted-foreground">
+                <Images className="h-6 w-6" />
+              </span>
+              <p className="text-sm text-muted-foreground max-w-xs">
+                {m.common.emptyRuns}
+              </p>
+            </FadeUp>
           ) : (
             <div className="space-y-4">
-              {runs.map((r) => (
-                <ErrorBoundary key={r.id} resetKey={r.status.state}>
-                  <RunCard
-                    run={r}
-                    progress={progress.get(r.id) ?? null}
-                    onOpenDetail={() => setDetailRunId(r.id)}
-                  />
-                </ErrorBoundary>
+              {runs.map((r, i) => (
+                <FadeUp key={r.id} delay={Math.min(i, 6) * 0.04}>
+                  <ErrorBoundary resetKey={r.status.state}>
+                    <RunCard
+                      run={r}
+                      progress={progress.get(r.id) ?? null}
+                      onOpenDetail={() => setDetailRunId(r.id)}
+                    />
+                  </ErrorBoundary>
+                </FadeUp>
               ))}
             </div>
           )}
