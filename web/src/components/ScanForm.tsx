@@ -59,7 +59,8 @@ export function ScanForm({ onScanStarted }: Props) {
     <>
       <Card>
         <CardHeader className="pb-4">
-          <CardTitle className="text-sm uppercase tracking-wider text-muted-foreground font-semibold">
+          <CardTitle className="flex items-center gap-2 text-sm uppercase tracking-wider text-muted-foreground font-semibold">
+            <FolderOpen className="h-4 w-4 text-primary/70" />
             {m.scanForm.title}
           </CardTitle>
         </CardHeader>
