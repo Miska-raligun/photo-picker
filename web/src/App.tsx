@@ -176,6 +176,16 @@ export default function App() {
 
   const detailRun = detailRunId ? runs.find((r) => r.id === detailRunId) ?? null : null;
   const groupRunRecord = groupRun ? runs.find((r) => r.id === groupRun) : null;
+  const groupCount = groupRunRecord?.composition_picks?.length ?? 0;
+
+  // Step through composition groups without closing the dialog. groupIdx is the
+  // pick's array position (== CompositionPickView.index), so clamp to the list.
+  function navigateGroup(delta: number) {
+    setGroupIdx((cur) => {
+      if (cur === null || groupCount === 0) return cur;
+      return Math.min(groupCount - 1, Math.max(0, cur + delta));
+    });
+  }
 
   return (
     <I18nContext.Provider value={{ lang, setLang, m }}>
@@ -271,6 +281,8 @@ export default function App() {
             }}
             runId={groupRun}
             pickIndex={groupIdx}
+            groupCount={groupCount}
+            onNavigate={navigateGroup}
             overrides={groupRun ? getOverrides(groupRun) : new Set()}
             inPlace={groupRunRecord?.in_place ?? false}
             vlmSettings={vlmSettings}

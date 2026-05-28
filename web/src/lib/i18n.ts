@@ -192,6 +192,8 @@ const enMessages = {
       toggleToReject: "Currently keeping (click to mark for delete)",
       toggleToKeep: "Will delete (click to mark to keep)",
       lightboxHint: "scroll · double-click to zoom · drag to pan · ESC to close",
+      prevGroup: "Previous group (←)",
+      nextGroup: "Next group (→)",
     },
     applyBar: {
       willDelete: "Will delete",
@@ -413,6 +415,8 @@ export const messages: Record<Lang, Messages> = {
       toggleToReject: "保留中（点击改为删除）",
       toggleToKeep: "将删除（点击改为保留）",
       lightboxHint: "滚轮缩放 · 双击放大 · 拖动平移 · ESC 关闭",
+      prevGroup: "上一组（←）",
+      nextGroup: "下一组（→）",
     },
     applyBar: {
       willDelete: "即将删除",

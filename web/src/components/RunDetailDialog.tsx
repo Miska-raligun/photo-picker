@@ -1,6 +1,17 @@
 import { useRef } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ExternalLink, Loader2 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
+import {
+  CheckCircle2,
+  Clock,
+  Database,
+  ExternalLink,
+  Images,
+  Layers,
+  LayoutGrid,
+  Loader2,
+  XCircle,
+} from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -64,26 +75,40 @@ export function RunDetailDialog({
         <div className="px-6 py-4 flex-1 overflow-y-auto space-y-5">
           {report && (
             <div className="flex flex-wrap gap-1.5">
-              <StatPill label={m.runCard.statPhotos} value={report.photo_count} />
               <StatPill
+                icon={Images}
+                label={m.runCard.statPhotos}
+                value={report.photo_count}
+              />
+              <StatPill
+                icon={Database}
                 label={m.runCard.statCache}
                 value={`${report.cached_count}/${report.photo_count}`}
                 accent={report.cached_count > 0 ? "success" : undefined}
               />
               <StatPill
+                icon={Layers}
                 label={m.runCard.statBursts}
                 value={report.stage_a_group_count}
               />
               <StatPill
+                icon={LayoutGrid}
                 label={m.runCard.statCompGroups}
                 value={report.stage_b_group_count}
               />
-              <StatPill label={m.runCard.statKept} value={report.picked_count} />
               <StatPill
+                icon={CheckCircle2}
+                label={m.runCard.statKept}
+                value={report.picked_count}
+                accent="success"
+              />
+              <StatPill
+                icon={XCircle}
                 label={m.runCard.statRejected}
                 value={report.rejected_count}
               />
               <StatPill
+                icon={Clock}
                 label={m.runCard.statElapsed}
                 value={`${(report.elapsed.secs + report.elapsed.nanos / 1e9).toFixed(2)}s`}
               />
@@ -225,10 +250,12 @@ function VirtualGroupStrip({
 }
 
 function StatPill({
+  icon: Icon,
   label,
   value,
   accent,
 }: {
+  icon: LucideIcon;
   label: string;
   value: string | number;
   accent?: "success";
@@ -237,9 +264,15 @@ function StatPill({
     <div
       className={cn(
         "inline-flex items-center gap-1.5 rounded-md border bg-muted/50 px-2.5 py-1 text-xs",
-        accent === "success" && "border-[var(--success)]"
+        accent === "success" && "border-[var(--success)]/40 bg-[var(--success)]/5"
       )}
     >
+      <Icon
+        className={cn(
+          "h-3.5 w-3.5",
+          accent === "success" ? "text-[var(--success)]" : "text-muted-foreground"
+        )}
+      />
       <span className="text-muted-foreground">{label}</span>
       <span className="font-semibold tabular-nums">{value}</span>
     </div>
