@@ -194,6 +194,7 @@ const enMessages = {
       lightboxHint: "scroll · double-click to zoom · drag to pan · ESC to close",
       prevGroup: "Previous group (←)",
       nextGroup: "Next group (→)",
+      groupUnavailable: "This group couldn't be loaded.",
     },
     applyBar: {
       willDelete: "Will delete",
@@ -417,6 +418,7 @@ export const messages: Record<Lang, Messages> = {
       lightboxHint: "滚轮缩放 · 双击放大 · 拖动平移 · ESC 关闭",
       prevGroup: "上一组（←）",
       nextGroup: "下一组（→）",
+      groupUnavailable: "无法加载该分组。",
     },
     applyBar: {
       willDelete: "即将删除",

@@ -148,8 +148,11 @@ export function RunDetailDialog({
           )}
 
           {!isRunning && !isFailed && picks.length === 0 && (
-            <div className="rounded-xl border border-dashed text-center text-muted-foreground italic text-sm py-12">
-              {m.runCard.emptyGroups}
+            <div className="rounded-xl border border-dashed bg-card/40 py-12 px-6 flex flex-col items-center text-center gap-3">
+              <span className="grid place-items-center h-12 w-12 rounded-full bg-muted text-muted-foreground">
+                <LayoutGrid className="h-6 w-6" />
+              </span>
+              <p className="text-sm text-muted-foreground">{m.runCard.emptyGroups}</p>
             </div>
           )}
 

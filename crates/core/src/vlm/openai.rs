@@ -113,6 +113,10 @@ impl VlmProvider for OpenAiProvider {
             // Honor HTTPS_PROXY / NO_PROXY env vars so foreign endpoints work
             // behind a Clash/v2ray-style proxy without going direct and hanging.
             .proxy(ureq::Proxy::try_from_env())
+            // Keep the response on 4xx/5xx instead of collapsing to a bare
+            // StatusCode error — the body carries the real reason (invalid key,
+            // unknown model, rate limit) we want to show the user.
+            .http_status_as_error(false)
             .build()
             .into();
 
@@ -125,11 +129,22 @@ impl VlmProvider for OpenAiProvider {
                 tracing::warn!(elapsed_ms = start.elapsed().as_millis() as u64, %e, "vlm openai request failed");
                 Error::Config(format!("openai request: {e}"))
             })?;
+        let status = resp.status();
         tracing::info!(
             elapsed_ms = start.elapsed().as_millis() as u64,
-            status = resp.status().as_u16(),
+            status = status.as_u16(),
             "vlm openai response"
         );
+        if !status.is_success() {
+            let body = resp.body_mut().read_to_string().unwrap_or_default();
+            let snippet: String = body.trim().chars().take(500).collect();
+            tracing::warn!(status = status.as_u16(), body = %snippet, "vlm openai error response");
+            return Err(Error::Config(format!(
+                "openai HTTP {}: {}",
+                status.as_u16(),
+                if snippet.is_empty() { "(empty body)" } else { &snippet }
+            )));
+        }
 
         let parsed: ChatResponse = resp
             .body_mut()

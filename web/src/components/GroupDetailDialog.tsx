@@ -2,6 +2,7 @@ import { memo, useEffect, useMemo, useState } from "react";
 import {
   ChevronLeft,
   ChevronRight,
+  ImageOff,
   Loader2,
   Maximize2,
   Settings as SettingsIcon,
@@ -159,11 +160,13 @@ export function GroupDetailDialog({
   const aiAnnotations = useMemo<Map<number, Ann> | null>(() => {
     if (!vlmResult) return null;
     const map = new Map<number, Ann>();
+    // The separator class tolerates markdown/paren noise the model often emits
+    // around the bracket, e.g. `**Rank 1 (Image 2)**:` or `Rank 1 (Image 2) —`.
     const patterns = [
       // Rank-first
-      /(?:Rank|排名|第)\s*[#]?\s*(\d+)[^\n]{0,40}?Image\s*[#]?\s*(\d+)\s*\)?\s*[:\-—–]\s*([^\n]+)/gi,
+      /(?:Rank|排名|第)\s*[#]?\s*(\d+)[^\n]{0,40}?Image\s*[#]?\s*(\d+)[\s)*_]*[:\-—–]\s*([^\n]+)/gi,
       // Image-first
-      /Image\s*[#]?\s*(\d+)[^\n]{0,40}?(?:Rank|排名|第)\s*[#]?\s*(\d+)\s*\)?\s*[:\-—–]\s*([^\n]+)/gi,
+      /Image\s*[#]?\s*(\d+)[^\n]{0,40}?(?:Rank|排名|第)\s*[#]?\s*(\d+)[\s)*_]*[:\-—–]\s*([^\n]+)/gi,
     ];
     for (let pi = 0; pi < patterns.length; pi++) {
       const re = patterns[pi];
@@ -171,7 +174,7 @@ export function GroupDetailDialog({
       while ((match = re.exec(vlmResult.text)) !== null) {
         const a = parseInt(match[1]);
         const b = parseInt(match[2]);
-        const reason = match[3]?.trim() ?? "";
+        const reason = (match[3] ?? "").replace(/^[\s*_]+|[\s*_]+$/g, "");
         if (Number.isNaN(a) || Number.isNaN(b)) continue;
         // pi=0 → (rank, image). pi=1 → (image, rank).
         const [rank, imageNum] = pi === 0 ? [a, b] : [b, a];
@@ -278,6 +281,12 @@ export function GroupDetailDialog({
               </div>
               <ScrollBar orientation="horizontal" />
             </ScrollArea>
+          )}
+          {!loading && (!pick || !runId) && (
+            <div className="flex-1 flex flex-col items-center justify-center gap-3 text-muted-foreground py-12">
+              <ImageOff className="h-8 w-8 opacity-50" />
+              <span className="text-sm">{m.detail.groupUnavailable}</span>
+            </div>
           )}
         </div>
 
