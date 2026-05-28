@@ -30,33 +30,3 @@ export function FadeUp({
     </motion.div>
   );
 }
-
-/// List container that staggers child entrances. Pair with `<FadeUp>` (or any
-/// motion child) — child `initial` runs in sequence at `staggerChildren`.
-/// Honors reduced motion (instant, no stagger).
-export function Stagger({
-  children,
-  stagger = 0.05,
-  className,
-}: {
-  children: ReactNode;
-  stagger?: number;
-  className?: string;
-}) {
-  const reduce = useReducedMotion();
-  return (
-    <motion.div
-      initial="hidden"
-      animate="show"
-      variants={{
-        hidden: {},
-        show: {
-          transition: reduce ? {} : { staggerChildren: stagger },
-        },
-      }}
-      className={className}
-    >
-      {children}
-    </motion.div>
-  );
-}
