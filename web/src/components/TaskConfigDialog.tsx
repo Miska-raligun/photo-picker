@@ -35,7 +35,6 @@ import { api } from "@/lib/api";
 import type { ExecutionProvider } from "@/lib/types";
 import { useM } from "@/lib/i18n";
 import { matchPreset, PRESETS, type PresetId, type PresetParams } from "@/lib/presets";
-import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 
 interface Props {
@@ -43,9 +42,7 @@ interface Props {
   onOpenChange: (v: boolean) => void;
   source: string;
   files: string[] | null;
-  output: string;
-  inPlace: boolean;
-  onStarted: (runId: string, summary: string, output: string) => void;
+  onStarted: (runId: string, summary: string) => void;
 }
 
 export function TaskConfigDialog({
@@ -53,8 +50,6 @@ export function TaskConfigDialog({
   onOpenChange,
   source,
   files,
-  output,
-  inPlace,
   onStarted,
 }: Props) {
   const m = useM();
@@ -76,7 +71,6 @@ export function TaskConfigDialog({
   const [enableClip, setEnableClip] = useState(initial.enable_clip);
   const [enableFace, setEnableFace] = useState(initial.enable_face);
   const [adaptiveThresholds, setAdaptiveThresholds] = useState(initial.adaptive_thresholds);
-  const [linkMode, setLinkMode] = useState<"copy" | "hardlink" | "symlink">("hardlink");
   const [thumbLongEdge, setThumbLongEdge] = useState(1024);
   const [executionProvider, setExecutionProvider] = useState<ExecutionProvider>("cpu");
   const [availableProviders, setAvailableProviders] = useState<ExecutionProvider[]>(["cpu"]);
@@ -145,7 +139,6 @@ export function TaskConfigDialog({
           ? undefined
           : k2Parsed;
       const req = {
-        output: inPlace ? source : output,
         k1,
         ...(k2Final !== undefined ? { k2: k2Final } : {}),
         time_k: timeK,
@@ -156,9 +149,7 @@ export function TaskConfigDialog({
         stage_b_threshold: stageBClip,
         enable_clip: enableClip,
         enable_face: enableFace,
-        in_place: inPlace,
         adaptive_thresholds: adaptiveThresholds,
-        link_mode: linkMode,
         thumbnail_long_edge: thumbLongEdge,
         execution_provider: executionProvider,
         ...(files && files.length > 0 ? { files } : { root: source }),
@@ -168,7 +159,7 @@ export function TaskConfigDialog({
         files && files.length > 0
           ? `${files.length} photos from ${source}`
           : source;
-      onStarted(run_id, summary, req.output);
+      onStarted(run_id, summary);
       onOpenChange(false);
     } catch (e) {
       toast.error(m.errors.failedToStart, {
@@ -196,14 +187,7 @@ export function TaskConfigDialog({
 
         <div className="overflow-y-auto px-6 py-5 flex-1 space-y-5">
           {/* Source summary */}
-          <div
-            className={cn(
-              "rounded-lg border px-3.5 py-2.5 text-xs",
-              inPlace
-                ? "border-primary/30 bg-accent"
-                : "border-border bg-muted/50"
-            )}
-          >
+          <div className="rounded-lg border border-border bg-muted/50 px-3.5 py-2.5 text-xs">
             <div className="font-mono break-all mb-1">
               <span className="text-muted-foreground">→ </span>
               {files && files.length > 0
@@ -211,9 +195,7 @@ export function TaskConfigDialog({
                 : source}
             </div>
             <div className="text-muted-foreground">
-              {inPlace
-                ? m.scanForm.inPlaceNotice
-                : m.scanForm.withOutputNotice + " " + output}
+              {m.scanForm.analyzeOnlyNotice}
             </div>
           </div>
 
@@ -475,26 +457,6 @@ export function TaskConfigDialog({
                       </FieldHelp>
                     </div>
 
-                    {!inPlace && (
-                      <FieldHelp
-                        label={m.scanForm.linkModeLabel}
-                        desc={m.scanForm.linkModeDesc}
-                      >
-                        <Select
-                          value={linkMode}
-                          onValueChange={(v) => setLinkMode(v as typeof linkMode)}
-                        >
-                          <SelectTrigger className="text-sm w-full sm:w-64">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="hardlink">{m.scanForm.linkHardlink}</SelectItem>
-                            <SelectItem value="copy">{m.scanForm.linkCopy}</SelectItem>
-                            <SelectItem value="symlink">{m.scanForm.linkSymlink}</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </FieldHelp>
-                    )}
                   </div>
                 </motion.div>
               )}

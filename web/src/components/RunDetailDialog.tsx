@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { LucideIcon } from "lucide-react";
 import {
@@ -6,10 +6,12 @@ import {
   Clock,
   Database,
   ExternalLink,
+  FolderClosed,
   Images,
   Layers,
   LayoutGrid,
   Loader2,
+  Upload,
   XCircle,
 } from "lucide-react";
 import {
@@ -18,11 +20,11 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { GroupCard } from "./GroupCard";
 import { ApplyBar } from "./ApplyBar";
+import { ExportDialog } from "./ExportDialog";
 import { api } from "@/lib/api";
 import { useM } from "@/lib/i18n";
 import type { RunRecord } from "@/lib/types";
@@ -46,11 +48,13 @@ export function RunDetailDialog({
   onApplyDone,
 }: Props) {
   const m = useM();
+  const [exportOpen, setExportOpen] = useState(false);
   if (!run) return null;
   const report = run.report;
   const picks = run.composition_picks ?? [];
   const isRunning = run.status.state === "running";
   const isFailed = run.status.state === "failed";
+  const isCompleted = run.status.state === "completed";
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -61,14 +65,10 @@ export function RunDetailDialog({
             <code className="font-mono text-xs bg-muted px-1.5 py-0.5 rounded text-muted-foreground">
               {run.id.slice(0, 8)}
             </code>
-            {run.in_place && (
-              <Badge variant="outline" className="text-[0.65rem] h-5">
-                {m.runCard.inPlace}
-              </Badge>
-            )}
           </DialogTitle>
-          <div className="text-xs font-mono text-muted-foreground break-all">
-            {run.root} <span className="text-foreground">→</span> {run.output}
+          <div className="flex items-center gap-1.5 text-xs font-mono text-muted-foreground min-w-0">
+            <FolderClosed className="h-3.5 w-3.5 shrink-0" />
+            <span className="break-all">{run.root}</span>
           </div>
         </DialogHeader>
 
@@ -172,7 +172,7 @@ export function RunDetailDialog({
             />
           )}
 
-          <div className="flex justify-end pt-2 border-t">
+          <div className="flex items-center justify-between gap-2 pt-2 border-t">
             <Button asChild variant="link" size="sm">
               <a
                 href={api.htmlReportUrl(run.id)}
@@ -183,9 +183,23 @@ export function RunDetailDialog({
                 <ExternalLink className="h-3 w-3" />
               </a>
             </Button>
+            {isCompleted && picks.length > 0 && (
+              <Button variant="outline" size="sm" onClick={() => setExportOpen(true)}>
+                <Upload className="h-4 w-4" />
+                {m.export.button}
+              </Button>
+            )}
           </div>
         </div>
       </DialogContent>
+
+      <ExportDialog
+        open={exportOpen}
+        onOpenChange={setExportOpen}
+        runId={run.id}
+        picks={picks}
+        overrides={overrides}
+      />
     </Dialog>
   );
 }

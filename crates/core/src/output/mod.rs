@@ -46,12 +46,16 @@ pub fn materialize(
     }
 
     jobs.par_iter()
-        .try_for_each(|(src, dest)| place(src, dest, link_mode))?;
+        .try_for_each(|(src, dest)| place_file(src, dest, link_mode))?;
 
     Ok((plan.picked.len(), plan.rejected.len()))
 }
 
-fn place(src: &Path, dest: &Path, mode: LinkMode) -> Result<()> {
+/// Place a single source file at `dest` using the requested link mode,
+/// overwriting any existing file. Hardlink failures (e.g. cross-device)
+/// fall back to a plain copy. Shared by the pipeline's `materialize` Write
+/// stage and the deferred per-run export endpoint.
+pub fn place_file(src: &Path, dest: &Path, mode: LinkMode) -> Result<()> {
     if dest.exists() {
         fs::remove_file(dest).map_err(|e| Error::Io { path: dest.to_path_buf(), source: e })?;
     }

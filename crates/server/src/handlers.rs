@@ -30,7 +30,13 @@ pub struct ScanRequest {
     /// `root`.
     #[serde(default)]
     pub files: Vec<PathBuf>,
-    pub output: PathBuf,
+    /// Where the run's internal artifacts (report.html/json, feature cache,
+    /// disk thumbnails) live. Optional: when absent the server picks a managed
+    /// per-source directory under the OS data dir, keeping the user's photo
+    /// folders clean. Runs never copy the photos themselves here — exporting
+    /// is the deferred `/export` action.
+    #[serde(default)]
+    pub output: Option<PathBuf>,
     #[serde(default = "default_k1")]
     pub k1: usize,
     /// `None` (or `0`) = auto mode (per-group keep count driven by score gaps).
@@ -103,6 +109,24 @@ fn parse_provider(s: &str) -> ExecutionProvider {
     }
 }
 
+/// Managed location for a run's internal artifacts (report.html/json, feature
+/// cache, disk thumbnails) when the client doesn't specify `output`. Keyed by
+/// a stable hash of the canonicalized source path so re-scanning the same
+/// folder reuses its feature/thumbnail caches — and the user's photo folders
+/// stay free of `.cache.db`/`report.html`.
+fn artifacts_dir(source: &std::path::Path) -> PathBuf {
+    use std::hash::{Hash, Hasher};
+    let canon = std::fs::canonicalize(source).unwrap_or_else(|_| source.to_path_buf());
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    canon.hash(&mut hasher);
+    let key = format!("{:016x}", hasher.finish());
+    dirs::data_dir()
+        .unwrap_or_else(std::env::temp_dir)
+        .join("photo-pick")
+        .join("cache")
+        .join(key)
+}
+
 /// Kick off a scan in the blocking pool. Returns immediately with the run id;
 /// poll `/api/runs/{id}` to follow status.
 pub async fn scan(
@@ -123,15 +147,23 @@ pub async fn scan(
 
     let run_id = Uuid::new_v4().to_string();
 
-    let html_report_path = req.output.join("report.html");
-    let report_path = req.output.join("report.json");
-    let cache_path = req.output.join(".cache.db");
+    // Internal artifacts live in the client-specified `output` if given, else a
+    // managed per-source dir. Photos are never copied here — runs are always
+    // analyze-only; exporting the keepers is the deferred `/export` action.
+    let artifacts = req
+        .output
+        .clone()
+        .unwrap_or_else(|| artifacts_dir(&display_root));
+
+    let html_report_path = artifacts.join("report.html");
+    let report_path = artifacts.join("report.json");
+    let cache_path = artifacts.join(".cache.db");
 
     let record = RunRecord {
         id: run_id.clone(),
         root: display_root,
-        output: req.output.clone(),
-        in_place: req.in_place,
+        output: artifacts.clone(),
+        in_place: true,
         status: RunStatus::Running,
         report: None,
         html_report: None,
@@ -157,6 +189,7 @@ pub async fn scan(
     let run_id_for_task = run_id.clone();
     let req_for_task = req;
     let source_for_task = source;
+    let artifacts_for_task = artifacts;
 
     tokio::spawn(async move {
         // Wait for a scan-pipeline permit so N concurrent /api/scan POSTs
@@ -169,7 +202,7 @@ pub async fn scan(
         let _ = tokio::task::spawn_blocking(move || {
         let cfg = PipelineConfig {
             source: source_for_task,
-            output: req_for_task.output.clone(),
+            output: artifacts_for_task.clone(),
             report_path: Some(report_path),
             html_report_path: Some(html_report_path.clone()),
             cache_path: Some(cache_path),
@@ -197,10 +230,12 @@ pub async fn scan(
             dry_run: false,
             enable_clip: req_for_task.enable_clip,
             enable_face: req_for_task.enable_face,
-            materialize_picks: !req_for_task.in_place,
+            // Runs are always analyze-only now; the user exports keepers or
+            // deletes rejects after reviewing, via the deferred endpoints.
+            materialize_picks: false,
             execution_provider: parse_provider(&req_for_task.execution_provider),
             adaptive_thresholds: req_for_task.adaptive_thresholds,
-            thumb_cache_dir: Some(req_for_task.output.join(".thumbs")),
+            thumb_cache_dir: Some(artifacts_for_task.join(".thumbs")),
         };
         let pipeline = Pipeline::new(cfg);
         let sink = crate::state::ChannelProgressSink {
@@ -823,6 +858,135 @@ pub async fn apply(
     }
 }
 
+#[derive(Debug, Deserialize)]
+pub struct ExportRequest {
+    /// Photos to copy out — typically the final kept set after the user's
+    /// keep/drop overrides. Each entry is a PhotoId UUID.
+    pub photo_ids: Vec<String>,
+    /// Destination directory; created if it doesn't exist.
+    pub target_dir: PathBuf,
+    /// "copy" | "hardlink" | "symlink". Defaults to copy — exports commonly
+    /// cross filesystems where hardlink fails (place_file falls back anyway).
+    #[serde(default)]
+    pub link_mode: Option<String>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct ExportResult {
+    pub requested: usize,
+    pub exported: usize,
+    pub failed: Vec<ApplyFailure>,
+    pub target_dir: PathBuf,
+}
+
+/// Pick a non-colliding destination path inside `dir` for `name`. Flat layout
+/// means two same-named originals from different bursts would clobber, so when
+/// a name is already taken we append ` (2)`, ` (3)`… before the extension.
+/// `used` is the authority (seed it with the target dir's existing entries to
+/// avoid clobbering prior contents); membership check + reserve are combined
+/// via `HashSet::insert`.
+fn unique_dest(
+    dir: &std::path::Path,
+    name: &std::ffi::OsStr,
+    used: &mut std::collections::HashSet<PathBuf>,
+) -> PathBuf {
+    let base = dir.join(name);
+    if used.insert(base.clone()) {
+        return base;
+    }
+    let p = std::path::Path::new(name);
+    let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("file");
+    let ext = p.extension().and_then(|s| s.to_str());
+    let mut n = 2u32;
+    loop {
+        let candidate = match ext {
+            Some(e) => format!("{stem} ({n}).{e}"),
+            None => format!("{stem} ({n})"),
+        };
+        let cand = dir.join(candidate);
+        if used.insert(cand.clone()) {
+            return cand;
+        }
+        n += 1;
+    }
+}
+
+/// Copy the requested photos out of the run's source into `target_dir`, flat.
+/// Non-destructive counterpart to `apply` — the originals are untouched.
+pub async fn export(
+    State(state): State<AppState>,
+    Path(run_id): Path<String>,
+    Json(req): Json<ExportRequest>,
+) -> impl IntoResponse {
+    // Resolve photo ids to source paths under the lock, then release for I/O.
+    let resolved: Vec<(String, PathBuf)> = {
+        let guard = state.runs.lock().await;
+        let Some(rec) = guard.get(&run_id) else {
+            return (StatusCode::NOT_FOUND, "run not found").into_response();
+        };
+        let mut out = Vec::with_capacity(req.photo_ids.len());
+        for id_str in &req.photo_ids {
+            let Ok(uuid) = Uuid::parse_str(id_str) else {
+                return (StatusCode::BAD_REQUEST, format!("bad photo id: {id_str}")).into_response();
+            };
+            let pid = photo_pick_core::ingest::PhotoId(uuid);
+            match rec.photos.get(&pid) {
+                Some(p) => out.push((id_str.clone(), p.path.clone())),
+                None => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        format!("photo {id_str} not in run"),
+                    )
+                        .into_response()
+                }
+            }
+        }
+        out
+    };
+
+    let mode = parse_link_mode(req.link_mode.as_deref().unwrap_or("copy"));
+    let target = req.target_dir.clone();
+    let result = tokio::task::spawn_blocking(move || -> std::result::Result<ExportResult, String> {
+        std::fs::create_dir_all(&target).map_err(|e| format!("create target dir: {e}"))?;
+        // Seed `used` with existing entries so we don't clobber prior contents.
+        let mut used: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+        if let Ok(rd) = std::fs::read_dir(&target) {
+            for entry in rd.flatten() {
+                used.insert(entry.path());
+            }
+        }
+        let mut exported = 0usize;
+        let mut failed: Vec<ApplyFailure> = Vec::new();
+        for (id, src) in &resolved {
+            let name = src
+                .file_name()
+                .unwrap_or_else(|| std::ffi::OsStr::new("photo"));
+            let dest = unique_dest(&target, name, &mut used);
+            match photo_pick_core::output::place_file(src, &dest, mode) {
+                Ok(()) => exported += 1,
+                Err(e) => failed.push(ApplyFailure {
+                    photo_id: id.clone(),
+                    path: dest,
+                    error: e.to_string(),
+                }),
+            }
+        }
+        Ok(ExportResult {
+            requested: resolved.len(),
+            exported,
+            failed,
+            target_dir: target,
+        })
+    })
+    .await;
+
+    match result {
+        Ok(Ok(r)) => Json(serde_json::to_value(r).unwrap()).into_response(),
+        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("export task: {e}")).into_response(),
+    }
+}
+
 /// Serve the on-disk HTML report a completed run wrote. We avoid generic
 /// `ServeDir` because reports live in user-chosen output directories — this
 /// reads only the registered run's `html_report` path.
@@ -840,5 +1004,57 @@ pub async fn get_run_html(
             Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("read failed: {e}")).into_response(),
         },
         _ => (StatusCode::NOT_FOUND, "no html report for this run").into_response(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::unique_dest;
+    use std::collections::HashSet;
+    use std::ffi::OsStr;
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn unique_dest_disambiguates_collisions() {
+        let dir = Path::new("/out");
+        let mut used: HashSet<PathBuf> = HashSet::new();
+        assert_eq!(
+            unique_dest(dir, OsStr::new("a.jpg"), &mut used),
+            PathBuf::from("/out/a.jpg")
+        );
+        assert_eq!(
+            unique_dest(dir, OsStr::new("a.jpg"), &mut used),
+            PathBuf::from("/out/a (2).jpg")
+        );
+        assert_eq!(
+            unique_dest(dir, OsStr::new("a.jpg"), &mut used),
+            PathBuf::from("/out/a (3).jpg")
+        );
+        // Distinct names don't collide.
+        assert_eq!(
+            unique_dest(dir, OsStr::new("b.jpg"), &mut used),
+            PathBuf::from("/out/b.jpg")
+        );
+        // Extension-less names disambiguate too.
+        assert_eq!(
+            unique_dest(dir, OsStr::new("README"), &mut used),
+            PathBuf::from("/out/README")
+        );
+        assert_eq!(
+            unique_dest(dir, OsStr::new("README"), &mut used),
+            PathBuf::from("/out/README (2)")
+        );
+    }
+
+    #[test]
+    fn unique_dest_respects_preexisting_seed() {
+        let dir = Path::new("/out");
+        let mut used: HashSet<PathBuf> = HashSet::new();
+        // Seed as if /out/a.jpg already exists on disk.
+        used.insert(PathBuf::from("/out/a.jpg"));
+        assert_eq!(
+            unique_dest(dir, OsStr::new("a.jpg"), &mut used),
+            PathBuf::from("/out/a (2).jpg")
+        );
     }
 }

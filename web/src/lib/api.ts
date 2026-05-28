@@ -3,6 +3,7 @@ import type {
   BrowseResponse,
   ExecutionProvider,
   ExplanationRecord,
+  ExportResult,
   RunRecord,
   ScanRequest,
   VlmConfig,
@@ -65,6 +66,23 @@ export const api = {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ delete_ids: deleteIds, use_trash: useTrash }),
+    });
+  },
+
+  async export(
+    runId: string,
+    photoIds: string[],
+    targetDir: string,
+    linkMode: "copy" | "hardlink" | "symlink" = "copy"
+  ): Promise<ExportResult> {
+    return request(`/api/runs/${runId}/export`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        photo_ids: photoIds,
+        target_dir: targetDir,
+        link_mode: linkMode,
+      }),
     });
   },
 
