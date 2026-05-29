@@ -1,13 +1,14 @@
 name: release
 
-# Build a self-contained Linux x86_64 bundle (binary + embedded UI + bundled
-# models + launcher) and attach it to a GitHub Release. Triggers on version
-# tags (v*) and can be run manually from the Actions tab.
+# Build self-contained bundles (binary + embedded UI + bundled models +
+# launcher) for Linux / macOS / Windows and attach them to a GitHub Release.
+# Triggers on version tags (v*) and can be run manually from the Actions tab.
 #
-# NOTE: only Linux x86_64 is built today — the onnxruntime static lib is fetched
-# per-target via scripts/fetch_onnxruntime.sh, which is currently Linux-only.
-# Windows/macOS targets can be added as matrix entries once that script gains
-# their pyke CDN URLs and the build is validated on those runners.
+# Cross-platform works via ort's `download-binaries` feature: each runner
+# fetches the prebuilt onnxruntime *static* lib for its own target at build
+# time (same pyke CDN the vendored Linux lib comes from), so every binary
+# stays self-contained. The vendored ORT_LIB_LOCATION (Linux-only) is removed
+# before building so the download path activates.
 
 on:
   push:
@@ -15,11 +16,24 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write # needed to create the release + upload assets
+  contents: write # create the release + upload assets
 
 jobs:
-  linux-x86_64:
-    runs-on: ubuntu-latest
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact: linux-x86_64
+            bin: photo-pick-server
+          - os: macos-latest
+            artifact: macos-arm64
+            bin: photo-pick-server
+          - os: windows-latest
+            artifact: windows-x86_64
+            bin: photo-pick-server.exe
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
@@ -37,6 +51,7 @@ jobs:
 
       - name: Build web UI
         working-directory: web
+        shell: bash
         run: |
           pnpm install --frozen-lockfile
           pnpm build
@@ -47,25 +62,39 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
-      - name: Fetch onnxruntime static lib
-        run: bash scripts/fetch_onnxruntime.sh
+      # Drop the vendored ORT_LIB_LOCATION (Linux-only static lib) so ort's
+      # download-binaries fetches the right static lib for this runner's target.
+      - name: Use download-binaries for onnxruntime
+        shell: bash
+        run: rm -f .cargo/config.toml
 
-      - name: Build server (release)
-        run: cargo build --release -p photo-pick-server
+      - name: Build server (release, native target)
+        shell: bash
+        run: cargo build --release -p photo-pick-server --features onnx-download
 
       - name: Fetch models
+        shell: bash
         run: bash scripts/fetch_models.sh staging/photo-pick/models
 
       - name: Assemble bundle
+        shell: bash
         run: |
           mkdir -p staging/photo-pick
-          cp target/release/photo-pick-server staging/photo-pick/
-          cp packaging/run.sh staging/photo-pick/
+          cp "target/release/${{ matrix.bin }}" staging/photo-pick/
           cp packaging/README.md staging/photo-pick/
-          chmod +x staging/photo-pick/run.sh staging/photo-pick/photo-pick-server
-          tarball="photo-pick-${GITHUB_REF_NAME}-linux-x86_64.tar.gz"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp packaging/run.bat staging/photo-pick/
+          else
+            cp packaging/run.sh staging/photo-pick/
+            chmod +x staging/photo-pick/run.sh "staging/photo-pick/${{ matrix.bin }}"
+          fi
+          tarball="photo-pick-${GITHUB_REF_NAME}-${{ matrix.artifact }}.tar.gz"
           tar -C staging -czf "$tarball" photo-pick
-          sha256sum "$tarball" > "$tarball.sha256"
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "$tarball" > "$tarball.sha256"
+          else
+            shasum -a 256 "$tarball" > "$tarball.sha256"
+          fi
           echo "TARBALL=$tarball" >> "$GITHUB_ENV"
 
       - name: Upload bundle to release

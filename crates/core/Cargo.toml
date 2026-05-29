@@ -15,6 +15,12 @@ default  = ["onnx"]
 # pure-Rust pipeline (ingest, scoring, grouping, cache) without linking the
 # onnxruntime static library.
 onnx     = ["dep:ort", "dep:ndarray"]
+# Like `onnx`, but lets ort fetch a prebuilt onnxruntime static lib for the
+# build target instead of using the vendored one at ORT_LIB_LOCATION. Used by
+# CI to build all platforms (the vendored lib + fetch script are Linux-only).
+# Local builds keep using `onnx` + the vendored lib; this only activates when
+# explicitly selected AND ORT_LIB_LOCATION is unset.
+onnx-download = ["onnx", "ort/download-binaries", "ort/tls-rustls"]
 cuda     = ["onnx"]
 coreml   = ["onnx"]
 directml = ["onnx"]
