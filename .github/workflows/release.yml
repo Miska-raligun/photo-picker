@@ -1,0 +1,77 @@
+name: release
+
+# Build a self-contained Linux x86_64 bundle (binary + embedded UI + bundled
+# models + launcher) and attach it to a GitHub Release. Triggers on version
+# tags (v*) and can be run manually from the Actions tab.
+#
+# NOTE: only Linux x86_64 is built today — the onnxruntime static lib is fetched
+# per-target via scripts/fetch_onnxruntime.sh, which is currently Linux-only.
+# Windows/macOS targets can be added as matrix entries once that script gains
+# their pyke CDN URLs and the build is validated on those runners.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write # needed to create the release + upload assets
+
+jobs:
+  linux-x86_64:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - name: Build web UI
+        working-directory: web
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Fetch onnxruntime static lib
+        run: bash scripts/fetch_onnxruntime.sh
+
+      - name: Build server (release)
+        run: cargo build --release -p photo-pick-server
+
+      - name: Fetch models
+        run: bash scripts/fetch_models.sh staging/photo-pick/models
+
+      - name: Assemble bundle
+        run: |
+          mkdir -p staging/photo-pick
+          cp target/release/photo-pick-server staging/photo-pick/
+          cp packaging/run.sh staging/photo-pick/
+          cp packaging/README.md staging/photo-pick/
+          chmod +x staging/photo-pick/run.sh staging/photo-pick/photo-pick-server
+          tarball="photo-pick-${GITHUB_REF_NAME}-linux-x86_64.tar.gz"
+          tar -C staging -czf "$tarball" photo-pick
+          sha256sum "$tarball" > "$tarball.sha256"
+          echo "TARBALL=$tarball" >> "$GITHUB_ENV"
+
+      - name: Upload bundle to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ env.TARBALL }}
+            ${{ env.TARBALL }}.sha256
+          generate_release_notes: true

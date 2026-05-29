@@ -23,10 +23,20 @@ pub struct ModelDescriptor {
 }
 
 /// Return the cache directory for ONNX models. Created if missing.
+///
+/// Honors `PHOTO_PICK_MODELS_DIR` first: release bundles ship the models
+/// alongside the binary and point this at them, so a packaged copy runs fully
+/// offline (the SHA-256 check in `ensure_model` still verifies them, and falls
+/// back to downloading only if a bundled file is missing/corrupt). Otherwise
+/// uses the per-user XDG cache.
 pub fn cache_dir() -> Result<PathBuf> {
-    let base = dirs::cache_dir()
-        .ok_or_else(|| Error::Config("no XDG cache dir available on this system".into()))?;
-    let dir = base.join("photo-pick").join("models");
+    let dir = if let Some(custom) = std::env::var_os("PHOTO_PICK_MODELS_DIR") {
+        PathBuf::from(custom)
+    } else {
+        let base = dirs::cache_dir()
+            .ok_or_else(|| Error::Config("no XDG cache dir available on this system".into()))?;
+        base.join("photo-pick").join("models")
+    };
     fs::create_dir_all(&dir).map_err(|e| Error::Io { path: dir.clone(), source: e })?;
     Ok(dir)
 }
