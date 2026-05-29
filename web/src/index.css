@@ -145,14 +145,22 @@
   animation: shimmer 1.6s ease-in-out infinite;
 }
 
-/* Warm radial wash behind the app shell — gives the page a soft visual anchor
-   without competing with content. Both themes get their own gradient. */
+/* Warm radial wash + a faint dot-grid texture behind the app shell — gives the
+   page a soft visual anchor without competing with content. All layers live in
+   the element's background so they always paint behind content; tokens keep it
+   theme-aware. Layer order (front→back): wash, dot grid, base color. */
 .app-shell {
   background:
     radial-gradient(60% 50% at 50% 0%,
       color-mix(in oklch, var(--accent) 35%, transparent) 0%,
       transparent 60%),
+    radial-gradient(
+        color-mix(in oklch, var(--muted-foreground) 12%, transparent) 1px,
+        transparent 1.5px
+      )
+      0 0 / 22px 22px,
     var(--background);
+  background-attachment: fixed, fixed, fixed;
 }
 
 @media (prefers-reduced-motion: reduce) {

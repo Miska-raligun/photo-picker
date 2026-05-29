@@ -77,17 +77,10 @@ export function RunCard({ run, progress, onOpenDetail }: Props) {
           <code className="font-mono text-xs bg-muted px-1.5 py-0.5 rounded text-muted-foreground">
             {run.id.slice(0, 8)}
           </code>
-          {run.in_place && (
-            <Badge variant="outline" className="text-[0.65rem] h-5">
-              {m.runCard.inPlace}
-            </Badge>
-          )}
         </div>
         <div className="flex items-center gap-1.5 text-xs text-muted-foreground min-w-0">
           <FolderClosed className="h-3.5 w-3.5 shrink-0" />
           <span className="font-mono truncate">{run.root}</span>
-          <ArrowRight className="h-3 w-3 shrink-0 text-foreground/60" />
-          <span className="font-mono truncate">{run.output}</span>
         </div>
       </CardHeader>
 

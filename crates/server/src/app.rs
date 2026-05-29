@@ -22,6 +22,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/runs/:id/preview/:photo_id", get(handlers::get_preview))
         .route("/api/runs/:id/explain", post(handlers::explain))
         .route("/api/runs/:id/apply", post(handlers::apply))
+        .route("/api/runs/:id/export", post(handlers::export))
         .layer(cors_layer())
         .layer(TraceLayer::new_for_http())
         .with_state(state)

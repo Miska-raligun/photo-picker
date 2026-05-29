@@ -12,6 +12,7 @@ import {
 import { Label } from "@/components/ui/label";
 import { api } from "@/lib/api";
 import { useM } from "@/lib/i18n";
+import { finalDropIds } from "@/lib/selection";
 import type { CompositionPickView } from "@/lib/types";
 import { toast } from "sonner";
 
@@ -25,26 +26,14 @@ interface Props {
 
 export function ApplyBar({ runId, picks, overrides, sourceRoot, onDone }: Props) {
   const m = useM();
-  // Walk all photos in the run with their algorithmic verdict; flip per
-  // overrides; collect both ids and filenames of what we're about to delete
-  // so the confirm dialog can show the user the actual names.
-  type Targ = { id: string; filename: string | null };
-  const targets: Targ[] = [];
-  for (const p of picks) {
-    for (const r of p.rejected) {
-      if (!overrides.has(r.photo_id)) {
-        targets.push({ id: r.photo_id, filename: r.filename });
-      }
-    }
-    for (const k of p.kept) {
-      if (overrides.has(k.photo_id)) {
-        targets.push({ id: k.photo_id, filename: k.filename });
-      }
-    }
-  }
-  const toDelete = targets.map((t) => t.id);
-  const deleteFilenames = targets
-    .map((t) => t.filename)
+  // Final delete set across all groups, folding in user overrides.
+  const toDelete = finalDropIds(picks, overrides);
+  // Filenames for the same set, so the confirm dialog can show actual names.
+  const dropSet = new Set(toDelete);
+  const deleteFilenames = picks
+    .flatMap((p) => [...p.kept, ...p.rejected])
+    .filter((ph) => dropSet.has(ph.photo_id))
+    .map((ph) => ph.filename)
     .filter((n): n is string => !!n);
   const overrideCount = overrides.size;
 

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Aperture, Images, Settings as SettingsIcon } from "lucide-react";
+import { Aperture, Settings as SettingsIcon } from "lucide-react";
 import { ScanForm } from "./components/ScanForm";
 import { RunCard } from "./components/RunCard";
 import { RunDetailDialog } from "./components/RunDetailDialog";
@@ -143,12 +143,12 @@ export default function App() {
     })();
   }, [subscribeProgress]);
 
-  function handleScanStarted(runId: string, summary: string, output: string) {
+  function handleScanStarted(runId: string, summary: string) {
     const placeholder: RunRecord = {
       id: runId,
       root: summary,
-      output,
-      in_place: false,
+      output: "",
+      in_place: true,
       status: { state: "running" },
       report: null,
       html_report: null,
@@ -187,68 +187,76 @@ export default function App() {
     });
   }
 
+  const hasRuns = runs.length > 0;
+
   return (
     <I18nContext.Provider value={{ lang, setLang, m }}>
-      <div className="app-shell min-h-screen">
-        <main className="max-w-5xl mx-auto px-6 pt-10 pb-20">
-          <header className="mb-10 flex items-start justify-between gap-4">
-            <div className="flex items-center gap-3">
-              <span className="grid place-items-center h-11 w-11 rounded-xl bg-primary/10 text-primary ring-1 ring-primary/15 shadow-sm">
-                <Aperture className="h-6 w-6" />
-              </span>
-              <div>
-                <h1 className="text-3xl font-semibold tracking-tight">
+      <div className="app-shell min-h-screen relative">
+        {/* Toggles float in the corner so the hero stays clean. */}
+        <div className="absolute top-4 right-4 z-10 flex items-center gap-1">
+          <ThemeToggle />
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setSettingsOpen(true)}
+            className="text-muted-foreground hover:text-foreground"
+            aria-label={m.common.settings}
+          >
+            <SettingsIcon className="h-4 w-4" />
+          </Button>
+          <LanguageToggle />
+        </div>
+
+        <main className="max-w-5xl mx-auto px-6 pb-20">
+          {!hasRuns ? (
+            // Empty: a Google-like centered hero — brand + one prominent input.
+            <FadeUp className="min-h-[78vh] flex flex-col items-center justify-center text-center gap-7">
+              <div className="flex flex-col items-center gap-3">
+                <span className="grid place-items-center h-16 w-16 rounded-2xl bg-primary/10 text-primary ring-1 ring-primary/15 shadow-sm">
+                  <Aperture className="h-8 w-8" />
+                </span>
+                <h1 className="text-4xl font-semibold tracking-tight">
                   {m.common.appName}
                 </h1>
-                <p className="text-muted-foreground mt-1 text-sm max-w-xl">
+                <p className="text-muted-foreground text-sm max-w-md">
                   {m.common.tagline}
                 </p>
               </div>
-            </div>
-            <div className="flex items-center gap-1">
-              <ThemeToggle />
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setSettingsOpen(true)}
-                className="text-muted-foreground hover:text-foreground"
-                aria-label={m.common.settings}
-              >
-                <SettingsIcon className="h-4 w-4" />
-              </Button>
-              <LanguageToggle />
-            </div>
-          </header>
-
-          <ScanForm onScanStarted={handleScanStarted} />
-
-          <div className="mt-8 mb-3 text-xs uppercase tracking-wider text-muted-foreground font-semibold">
-            {m.common.runsSection}
-          </div>
-
-          {runs.length === 0 ? (
-            <FadeUp className="rounded-xl border border-dashed bg-card/40 py-14 px-6 flex flex-col items-center text-center gap-3">
-              <span className="grid place-items-center h-12 w-12 rounded-full bg-muted text-muted-foreground">
-                <Images className="h-6 w-6" />
-              </span>
-              <p className="text-sm text-muted-foreground max-w-xs">
-                {m.common.emptyRuns}
-              </p>
+              <ScanForm onScanStarted={handleScanStarted} />
             </FadeUp>
           ) : (
-            <div className="space-y-4">
-              {runs.map((r, i) => (
-                <FadeUp key={r.id} delay={Math.min(i, 6) * 0.04}>
-                  <ErrorBoundary resetKey={r.status.state}>
-                    <RunCard
-                      run={r}
-                      progress={progress.get(r.id) ?? null}
-                      onOpenDetail={() => setDetailRunId(r.id)}
-                    />
-                  </ErrorBoundary>
-                </FadeUp>
-              ))}
-            </div>
+            // With runs: brand shrinks into a top bar with a compact input.
+            <>
+              <header className="pt-8 mb-8 flex items-center gap-3">
+                <span className="grid place-items-center h-10 w-10 rounded-xl bg-primary/10 text-primary ring-1 ring-primary/15 shadow-sm shrink-0">
+                  <Aperture className="h-5 w-5" />
+                </span>
+                <h1 className="text-xl font-semibold tracking-tight shrink-0">
+                  {m.common.appName}
+                </h1>
+                <div className="flex-1 min-w-0 max-w-xl ml-auto">
+                  <ScanForm onScanStarted={handleScanStarted} compact />
+                </div>
+              </header>
+
+              <div className="mb-3 text-xs uppercase tracking-wider text-muted-foreground font-semibold">
+                {m.common.runsSection}
+              </div>
+
+              <div className="space-y-4">
+                {runs.map((r, i) => (
+                  <FadeUp key={r.id} delay={Math.min(i, 6) * 0.04}>
+                    <ErrorBoundary resetKey={r.status.state}>
+                      <RunCard
+                        run={r}
+                        progress={progress.get(r.id) ?? null}
+                        onOpenDetail={() => setDetailRunId(r.id)}
+                      />
+                    </ErrorBoundary>
+                  </FadeUp>
+                ))}
+              </div>
+            </>
           )}
         </main>
 

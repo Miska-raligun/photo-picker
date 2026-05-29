@@ -55,6 +55,8 @@ const enMessages = {
       inPlaceNotice:
         "No output directory set → in-place mode. Picks stay in source; rejected files can be deleted from source after review.",
       withOutputNotice: "Picks will be copied into the output directory.",
+      analyzeOnlyNotice:
+        "Analyze only — originals stay put. After review you can export the keepers to a folder or delete the rejects.",
 
       k1Label: "K1 — keep per burst",
       k1Desc:
@@ -196,6 +198,24 @@ const enMessages = {
       nextGroup: "Next group (→)",
       groupUnavailable: "This group couldn't be loaded.",
     },
+    export: {
+      button: "Export…",
+      title: "Export kept photos",
+      desc: "Copy the photos you're keeping into another folder. Originals are left untouched.",
+      chooseFolder: "Choose folder",
+      noFolder: "No folder chosen yet",
+      willExport: (n: number) =>
+        `${n} ${n === 1 ? "photo" : "photos"} will be exported`,
+      linkMode: "How to place files",
+      linkCopy: "Copy (safest)",
+      linkHardlink: "Hardlink (same filesystem)",
+      linkSymlink: "Symlink (fragile if originals move)",
+      run: (n: number) => `Export ${n}`,
+      nothingToExport: "Nothing to export",
+      toastDone: "exported",
+      toastFailedSuffix: "failed",
+      toastFailed: "Export failed",
+    },
     applyBar: {
       willDelete: "Will delete",
       rejectedFile: "rejected file",
@@ -295,6 +315,7 @@ export const messages: Record<Lang, Messages> = {
       advancedHint: "阈值、GPU、输出方式…",
       inPlaceNotice: "未填输出目录 → 启用原地模式。算法选中的留在源目录，被拒的可在结果页确认后删除。",
       withOutputNotice: "选中的照片会复制到输出目录。",
+      analyzeOnlyNotice: "仅分析——原图保持不动。审完后可把保留项导出到某个文件夹，或删除被拒的照片。",
 
       k1Label: "K1：每组连拍保留张数",
       k1Desc: "Stage A 把短时间内拍的几乎相同的照片归为一组连拍，从每组里按技术质量保留最好的 K1 张。",
@@ -419,6 +440,23 @@ export const messages: Record<Lang, Messages> = {
       prevGroup: "上一组（←）",
       nextGroup: "下一组（→）",
       groupUnavailable: "无法加载该分组。",
+    },
+    export: {
+      button: "导出…",
+      title: "导出保留的照片",
+      desc: "把你要保留的照片复制到另一个文件夹，原图保持不动。",
+      chooseFolder: "选择文件夹",
+      noFolder: "尚未选择文件夹",
+      willExport: (n: number) => `将导出 ${n} 张照片`,
+      linkMode: "放置方式",
+      linkCopy: "复制（最稳）",
+      linkHardlink: "硬链接（同一磁盘）",
+      linkSymlink: "符号链接（原图移动后会失效）",
+      run: (n: number) => `导出 ${n} 张`,
+      nothingToExport: "没有可导出的照片",
+      toastDone: "已导出",
+      toastFailedSuffix: "失败",
+      toastFailed: "导出失败",
     },
     applyBar: {
       willDelete: "即将删除",

@@ -1,41 +1,32 @@
 import { useState } from "react";
 import { ArrowRight, FolderOpen, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { BrowseDialog, type BrowseResult } from "./BrowseDialog";
-import { FieldHelp } from "./FieldHelp";
 import { TaskConfigDialog } from "./TaskConfigDialog";
 import { useM } from "@/lib/i18n";
+import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 
 interface Props {
-  onScanStarted: (runId: string, summary: string, output: string) => void;
+  onScanStarted: (runId: string, summary: string) => void;
+  /// Compact bar form (used once runs exist); otherwise the large hero input.
+  compact?: boolean;
 }
 
-export function ScanForm({ onScanStarted }: Props) {
+export function ScanForm({ onScanStarted, compact = false }: Props) {
   const m = useM();
   const [root, setRoot] = useState("");
-  const [output, setOutput] = useState("");
   const [explicitFiles, setExplicitFiles] = useState<{
     files: string[];
     sourceDir: string;
   } | null>(null);
 
   const [browseOpen, setBrowseOpen] = useState(false);
-  const [browseMode, setBrowseMode] = useState<"source" | "output">("source");
   const [configOpen, setConfigOpen] = useState(false);
 
-  function openBrowser(mode: "source" | "output") {
-    setBrowseMode(mode);
-    setBrowseOpen(true);
-  }
-
   function handleBrowseConfirm(result: BrowseResult) {
-    if (browseMode === "output") {
-      if (result.kind === "folder") setOutput(result.path);
-    } else if (result.kind === "files") {
+    if (result.kind === "files") {
       setExplicitFiles({ files: result.files, sourceDir: result.sourceDir });
       setRoot("");
     } else {
@@ -52,103 +43,84 @@ export function ScanForm({ onScanStarted }: Props) {
     setConfigOpen(true);
   }
 
-  const inPlace = !output.trim();
   const effectiveSource = explicitFiles ? explicitFiles.sourceDir : root;
 
   return (
-    <>
-      <Card>
-        <CardHeader className="pb-4">
-          <CardTitle className="flex items-center gap-2 text-sm uppercase tracking-wider text-muted-foreground font-semibold">
-            <FolderOpen className="h-4 w-4 text-primary/70" />
-            {m.scanForm.title}
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="grid gap-5">
-            <FieldHelp
-              label={m.scanForm.source}
-              htmlFor="root"
-              desc={m.scanForm.sourceDesc}
-            >
-              <div className="flex gap-2">
-                <Input
-                  id="root"
-                  value={root}
-                  onChange={(e) => {
-                    setRoot(e.target.value);
-                    setExplicitFiles(null);
-                  }}
-                  placeholder={m.scanForm.sourcePlaceholder}
-                  className="font-mono text-sm"
-                />
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => openBrowser("source")}
-                >
-                  <FolderOpen className="h-4 w-4" />
-                  {m.scanForm.browse}
-                </Button>
-              </div>
-              {explicitFiles && (
-                <Badge
-                  variant="secondary"
-                  className="bg-accent text-accent-foreground gap-1.5 self-start mt-2"
-                >
-                  {explicitFiles.files.length} photos from{" "}
-                  {explicitFiles.sourceDir}
-                  <button
-                    type="button"
-                    onClick={() => setExplicitFiles(null)}
-                    className="ml-1 hover:opacity-70"
-                    aria-label="clear selection"
-                  >
-                    <X className="h-3 w-3" />
-                  </button>
-                </Badge>
-              )}
-            </FieldHelp>
+    <div className={cn("w-full", compact ? "" : "max-w-2xl mx-auto")}>
+      <div
+        className={cn(
+          "flex items-center gap-1.5 rounded-full border bg-card shadow-sm transition-shadow focus-within:shadow-md focus-within:border-primary/40",
+          compact ? "px-2 py-1.5" : "px-3 py-2.5"
+        )}
+      >
+        <FolderOpen className="ml-2 h-4 w-4 text-muted-foreground shrink-0" />
+        <input
+          value={explicitFiles ? "" : root}
+          onChange={(e) => {
+            setRoot(e.target.value);
+            setExplicitFiles(null);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              createTask();
+            }
+          }}
+          placeholder={
+            explicitFiles
+              ? `${explicitFiles.files.length} photos selected`
+              : m.scanForm.sourcePlaceholder
+          }
+          className={cn(
+            "flex-1 bg-transparent outline-none font-mono min-w-0 placeholder:text-muted-foreground/70",
+            compact ? "text-sm" : "text-sm sm:text-base"
+          )}
+        />
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="shrink-0 text-muted-foreground hover:text-foreground"
+          onClick={() => setBrowseOpen(true)}
+        >
+          <FolderOpen className="h-4 w-4" />
+          <span className="hidden sm:inline">{m.scanForm.browse}</span>
+        </Button>
+        <Button
+          type="button"
+          onClick={createTask}
+          size={compact ? "sm" : "default"}
+          className="rounded-full shrink-0"
+        >
+          {m.scanForm.createTask}
+          <ArrowRight className="h-4 w-4" />
+        </Button>
+      </div>
 
-            <FieldHelp
-              label={m.scanForm.output}
-              htmlFor="output"
-              desc={m.scanForm.outputDesc}
+      {explicitFiles && (
+        <div className="mt-2 flex justify-center">
+          <Badge
+            variant="secondary"
+            className="bg-accent text-accent-foreground gap-1.5"
+          >
+            {explicitFiles.files.length} photos from {explicitFiles.sourceDir}
+            <button
+              type="button"
+              onClick={() => setExplicitFiles(null)}
+              className="ml-1 hover:opacity-70"
+              aria-label="clear selection"
             >
-              <div className="flex gap-2">
-                <Input
-                  id="output"
-                  value={output}
-                  onChange={(e) => setOutput(e.target.value)}
-                  placeholder={m.scanForm.outputPlaceholder}
-                  className="font-mono text-sm"
-                />
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => openBrowser("output")}
-                >
-                  <FolderOpen className="h-4 w-4" />
-                  {m.scanForm.browse}
-                </Button>
-              </div>
-            </FieldHelp>
-
-            <div className="flex justify-end pt-2">
-              <Button onClick={createTask} size="lg">
-                {m.scanForm.createTask}
-                <ArrowRight className="h-4 w-4" />
-              </Button>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+              <X className="h-3 w-3" />
+            </button>
+          </Badge>
+        </div>
+      )}
 
       <BrowseDialog
         open={browseOpen}
         onOpenChange={setBrowseOpen}
-        mode={browseMode}
-        initialPath={browseMode === "source" ? root : output}
+        mode="source"
+        initialPath={root}
         onConfirm={handleBrowseConfirm}
       />
 
@@ -157,10 +129,8 @@ export function ScanForm({ onScanStarted }: Props) {
         onOpenChange={setConfigOpen}
         source={effectiveSource}
         files={explicitFiles?.files ?? null}
-        output={output}
-        inPlace={inPlace}
         onStarted={onScanStarted}
       />
-    </>
+    </div>
   );
 }

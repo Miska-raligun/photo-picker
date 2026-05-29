@@ -65,7 +65,9 @@ export interface ExplanationRecord {
 export interface ScanRequest {
   root?: string;
   files?: string[];
-  output: string;
+  /// Optional: when omitted the server stores the run's internal artifacts in
+  /// a managed per-source dir. Runs never copy photos here — export is deferred.
+  output?: string;
   k1?: number;
   k2?: number;
   time_k?: number;
@@ -143,4 +145,11 @@ export interface ApplyFailure {
   photo_id: string;
   path: string;
   error: string;
+}
+
+export interface ExportResult {
+  requested: number;
+  exported: number;
+  failed: ApplyFailure[];
+  target_dir: string;
 }
