@@ -116,7 +116,13 @@ fn parse_provider(s: &str) -> ExecutionProvider {
 /// stay free of `.cache.db`/`report.html`.
 fn artifacts_dir(source: &std::path::Path) -> PathBuf {
     use std::hash::{Hash, Hasher};
-    let canon = std::fs::canonicalize(source).unwrap_or_else(|_| source.to_path_buf());
+    let canon = std::fs::canonicalize(source).unwrap_or_else(|e| {
+        // Fall back to the raw path. Note: different spellings of the same dir
+        // (symlink vs target, relative vs absolute) then hash to different
+        // cache dirs and won't share the feature/thumbnail cache.
+        tracing::debug!(path = %source.display(), %e, "canonicalize failed; using raw path for cache key");
+        source.to_path_buf()
+    });
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     canon.hash(&mut hasher);
     let key = format!("{:016x}", hasher.finish());

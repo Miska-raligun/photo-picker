@@ -16,6 +16,10 @@ import type { ProgressEvent, RunProgress, RunRecord, VlmSettings } from "./lib/t
 import { I18nContext, LANG_STORAGE_KEY, messages, type Lang } from "./lib/i18n";
 import { loadVlmSettings } from "./lib/vlmStore";
 
+/// Shared empty override set — a stable reference keeps memoized cards from
+/// re-rendering when a run has no overrides yet.
+const EMPTY_OVERRIDES: Set<string> = new Set();
+
 export default function App() {
   const [lang, setLangState] = useState<Lang>(() => {
     const stored = localStorage.getItem(LANG_STORAGE_KEY) as Lang | null;
@@ -160,7 +164,9 @@ export default function App() {
   }
 
   function getOverrides(runId: string): Set<string> {
-    return overrides.get(runId) ?? new Set();
+    // Reuse a stable empty set so memoized children (RunCard/GroupCard) don't
+    // re-render on every parent render just because of a fresh `new Set()`.
+    return overrides.get(runId) ?? EMPTY_OVERRIDES;
   }
 
   function toggleOverride(runId: string, photoId: string) {
@@ -186,6 +192,9 @@ export default function App() {
       return Math.min(groupCount - 1, Math.max(0, cur + delta));
     });
   }
+
+  // Stable identity so memoized RunCards don't re-render on every SSE tick.
+  const openDetail = useCallback((id: string) => setDetailRunId(id), []);
 
   const hasRuns = runs.length > 0;
 
@@ -250,7 +259,7 @@ export default function App() {
                       <RunCard
                         run={r}
                         progress={progress.get(r.id) ?? null}
-                        onOpenDetail={() => setDetailRunId(r.id)}
+                        onOpenDetail={openDetail}
                       />
                     </ErrorBoundary>
                   </FadeUp>
@@ -269,7 +278,7 @@ export default function App() {
             open={detailRunId !== null}
             onOpenChange={(v) => !v && setDetailRunId(null)}
             run={detailRun}
-            overrides={detailRunId ? getOverrides(detailRunId) : new Set()}
+            overrides={detailRunId ? getOverrides(detailRunId) : EMPTY_OVERRIDES}
             onOpenGroup={(idx) => {
               setGroupRun(detailRunId);
               setGroupIdx(idx);
@@ -291,7 +300,7 @@ export default function App() {
             pickIndex={groupIdx}
             groupCount={groupCount}
             onNavigate={navigateGroup}
-            overrides={groupRun ? getOverrides(groupRun) : new Set()}
+            overrides={groupRun ? getOverrides(groupRun) : EMPTY_OVERRIDES}
             inPlace={groupRunRecord?.in_place ?? false}
             vlmSettings={vlmSettings}
             onOpenSettings={() => setSettingsOpen(true)}

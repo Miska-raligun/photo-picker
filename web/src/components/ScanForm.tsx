@@ -27,8 +27,9 @@ export function ScanForm({ onScanStarted, compact = false }: Props) {
 
   function handleBrowseConfirm(result: BrowseResult) {
     if (result.kind === "files") {
+      // Keep any typed `root` so clearing the file selection restores it; the
+      // input visually yields to the selection while explicitFiles is set.
       setExplicitFiles({ files: result.files, sourceDir: result.sourceDir });
-      setRoot("");
     } else {
       setRoot(result.path);
       setExplicitFiles(null);

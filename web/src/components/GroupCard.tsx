@@ -58,7 +58,7 @@ function GroupCardImpl({ runId, pick, overrides, onClick }: Props) {
       </div>
       <div className="mt-4 text-center space-y-0.5">
         <div className="text-xs font-mono text-muted-foreground">
-          #{pick.index} · {pick.scene}
+          #{pick.index + 1} · {pick.scene}
         </div>
         <div className="text-xs text-foreground truncate px-1">
           {rep?.filename ?? "(empty)"}

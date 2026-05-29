@@ -1,3 +1,4 @@
+import { memo } from "react";
 import type { LucideIcon } from "lucide-react";
 import {
   AlertCircle,
@@ -22,10 +23,10 @@ import { cn } from "@/lib/utils";
 interface Props {
   run: RunRecord;
   progress?: RunProgress | null;
-  onOpenDetail: () => void;
+  onOpenDetail: (runId: string) => void;
 }
 
-export function RunCard({ run, progress, onOpenDetail }: Props) {
+function RunCardImpl({ run, progress, onOpenDetail }: Props) {
   const m = useM();
   const state = run.status.state;
   const error = state === "failed" ? run.status.error : null;
@@ -68,7 +69,7 @@ export function RunCard({ run, progress, onOpenDetail }: Props) {
         state === "completed" &&
           "cursor-pointer hover:shadow-md hover:-translate-y-0.5 hover:border-primary/20"
       )}
-      onClick={() => state === "completed" && onOpenDetail()}
+      onClick={() => state === "completed" && onOpenDetail(run.id)}
     >
       <CardHeader className="space-y-2 pb-3">
         <div className="flex items-center gap-2.5 flex-wrap">
@@ -164,7 +165,7 @@ export function RunCard({ run, progress, onOpenDetail }: Props) {
               size="sm"
               onClick={(e) => {
                 e.stopPropagation();
-                onOpenDetail();
+                onOpenDetail(run.id);
               }}
             >
               {m.runCard.viewResults}
@@ -176,6 +177,10 @@ export function RunCard({ run, progress, onOpenDetail }: Props) {
     </Card>
   );
 }
+
+/// Memoized: with a stable `onOpenDetail` and `EMPTY_OVERRIDES`, non-running
+/// cards skip re-render on every SSE progress tick of a sibling run.
+export const RunCard = memo(RunCardImpl);
 
 function StatPill({
   icon: Icon,

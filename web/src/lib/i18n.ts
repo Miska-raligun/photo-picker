@@ -14,7 +14,6 @@ const enMessages = {
       tagline:
         "Local two-stage culling for burst-mode photography. Pipeline + VLM, fully on your machine.",
       runsSection: "Tasks",
-      emptyRuns: "No tasks yet. Pick a source above and create one.",
       cancel: "Cancel",
       close: "Close",
       apply: "Apply",
@@ -26,19 +25,10 @@ const enMessages = {
       themeLight: "Switch to light",
     },
     scanForm: {
-      title: "New task",
-      source: "Source",
-      sourceDesc: "Folder of photos to cull, or a hand-picked subset.",
       sourcePlaceholder: "/path/to/shoot  (or /mnt/c/... in WSL)",
-      output: "Output directory (optional)",
-      outputDesc:
-        "Where reports and cache go. Leave empty to use in-place mode (no picked/ folder; rejected files can be deleted from source).",
-      outputPlaceholder: "leave empty for in-place mode",
       browse: "Browse",
       createTask: "Create task",
       startTask: "Start task",
-      runScan: "Start task",
-      paramsHeading: "Parameters",
       configureTaskTitle: "Configure task",
       configureTaskDesc: "Pick how aggressively to cull. Defaults work for most shoots.",
 
@@ -51,10 +41,7 @@ const enMessages = {
       presetGentleTitle: "Generous",
       presetGentleHint: "Keep more — looser grouping, more survivors per burst.",
       advancedLabel: "Advanced settings",
-      advancedHint: "thresholds, GPU, output mode…",
-      inPlaceNotice:
-        "No output directory set → in-place mode. Picks stay in source; rejected files can be deleted from source after review.",
-      withOutputNotice: "Picks will be copied into the output directory.",
+      advancedHint: "thresholds, GPU, scoring…",
       analyzeOnlyNotice:
         "Analyze only — originals stay put. After review you can export the keepers to a folder or delete the rejects.",
 
@@ -99,10 +86,6 @@ const enMessages = {
       enableFaceDesc:
         "Detect faces so portrait scenes get portrait-specific scoring (eye-open, face sharpness etc.). Adds ~15ms per photo on CPU.",
 
-      inPlaceLabel: "In-place mode",
-      inPlaceDesc:
-        "Don't copy picks into the output folder. Review picks in the UI, then click Apply to delete rejected files from the source (recoverable via OS trash).",
-
       adaptiveLabel: "Adaptive thresholds",
       adaptiveDesc:
         "Tighten Stage A/B CLIP thresholds for portrait-heavy shoots (avoid merging different people) and loosen for landscape-only (more aggressive grouping). Bias capped at ±0.025.",
@@ -114,13 +97,6 @@ const enMessages = {
       thumbEdgeLabel: "Analysis thumbnail size (px)",
       thumbEdgeDesc:
         "Long edge of the in-memory thumbnail fed to CLIP / face / scoring. Larger = sharper face detection on small subjects, much slower. 1024 is a good balance.",
-
-      linkModeLabel: "Output link mode",
-      linkModeDesc:
-        "How picks are placed in the output folder. Hardlinks are zero-cost when source and output live on the same filesystem.",
-      linkHardlink: "Hardlink (recommended, same filesystem)",
-      linkCopy: "Copy (safest, uses disk)",
-      linkSymlink: "Symlink (smallest, fragile if source moves)",
     },
     settings: {
       title: "Settings",
@@ -151,7 +127,6 @@ const enMessages = {
       running: "running",
       completed: "completed",
       failed: "failed",
-      inPlace: "in-place",
       statPhotos: "photos",
       statCache: "cache",
       statBursts: "bursts",
@@ -276,7 +251,6 @@ export const messages: Record<Lang, Messages> = {
       appName: "photo-pick 智能选片",
       tagline: "本地化的微单连拍选片助手。两阶段算法 + 视觉大模型解释，全程在你电脑上跑。",
       runsSection: "任务列表",
-      emptyRuns: "还没有任务。在上面选好源目录，点击\"创建任务\"。",
       cancel: "取消",
       close: "关闭",
       apply: "执行",
@@ -288,18 +262,10 @@ export const messages: Record<Lang, Messages> = {
       themeLight: "切换到浅色",
     },
     scanForm: {
-      title: "新建任务",
-      source: "源目录",
-      sourceDesc: "要筛选的照片所在文件夹，或手动挑选其中若干张。",
       sourcePlaceholder: "/path/to/shoot（WSL 用 /mnt/c/... 格式）",
-      output: "输出目录（可选）",
-      outputDesc: "存放报告和缓存的目录。**留空则自动启用原地模式**：不在外部生成 picked/ 文件夹，可在结果页直接删除源目录里被拒的照片。",
-      outputPlaceholder: "留空即原地模式",
       browse: "浏览",
       createTask: "创建任务",
       startTask: "开始任务",
-      runScan: "开始任务",
-      paramsHeading: "算法参数",
       configureTaskTitle: "配置任务",
       configureTaskDesc: "选择筛选的力度即可，默认值适用于大多数情况。",
 
@@ -312,9 +278,7 @@ export const messages: Record<Lang, Messages> = {
       presetGentleTitle: "宽松保留",
       presetGentleHint: "多留一些——分组更松，每组连拍保留更多。",
       advancedLabel: "高级设置",
-      advancedHint: "阈值、GPU、输出方式…",
-      inPlaceNotice: "未填输出目录 → 启用原地模式。算法选中的留在源目录，被拒的可在结果页确认后删除。",
-      withOutputNotice: "选中的照片会复制到输出目录。",
+      advancedHint: "阈值、GPU、评分…",
       analyzeOnlyNotice: "仅分析——原图保持不动。审完后可把保留项导出到某个文件夹，或删除被拒的照片。",
 
       k1Label: "K1：每组连拍保留张数",
@@ -348,9 +312,6 @@ export const messages: Record<Lang, Messages> = {
       enableFaceLabel: "启用人脸检测",
       enableFaceDesc: "检测到人脸后会切换到人像评分档（睁眼、人脸清晰度等）。CPU 上每张多耗 ~15ms。",
 
-      inPlaceLabel: "原地操作模式",
-      inPlaceDesc: "不在输出目录生成 picked/。在界面里看选片结果，确认后点 Apply 把被拒照片删除（默认进回收站，可恢复）。",
-
       adaptiveLabel: "自适应阈值",
       adaptiveDesc: "人像多的拍摄自动收紧 Stage A/B 阈值（避免不同人脸被合并），风光多的放宽（更激进合并）。偏移幅度封顶 ±0.025。",
 
@@ -359,12 +320,6 @@ export const messages: Record<Lang, Messages> = {
 
       thumbEdgeLabel: "分析缩略图长边（像素）",
       thumbEdgeDesc: "用于 CLIP / 人脸 / 评分的内存缩略图长边。值越大对小人脸越敏感，但速度大幅下降。1024 是平衡值。",
-
-      linkModeLabel: "输出链接方式",
-      linkModeDesc: "把入选照片放到输出目录的方式。同一文件系统下硬链接零开销。",
-      linkHardlink: "硬链接（推荐，源/输出在同一磁盘）",
-      linkCopy: "复制（最稳，占磁盘）",
-      linkSymlink: "符号链接（最省，源移动后会失效）",
     },
     settings: {
       title: "设置",
@@ -394,7 +349,6 @@ export const messages: Record<Lang, Messages> = {
       running: "进行中",
       completed: "完成",
       failed: "失败",
-      inPlace: "原地模式",
       statPhotos: "总数",
       statCache: "缓存命中",
       statBursts: "连拍组",

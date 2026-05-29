@@ -224,11 +224,11 @@ export function GroupDetailDialog({
               </Button>
             </div>
             <span className="tabular-nums">
-              #{pickIndex}
+              #{(pickIndex ?? 0) + 1}
               {groupCount > 0 && (
                 <span className="text-muted-foreground font-normal text-sm">
                   {" "}
-                  · {(pickIndex ?? 0) + 1}/{groupCount}
+                  / {groupCount}
                 </span>
               )}
             </span>
