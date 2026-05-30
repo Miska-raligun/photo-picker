@@ -367,9 +367,35 @@ pub struct BrowseFile {
 }
 
 /// List photo-relevant entries in a server-side directory.
+///
+/// Windows specifics:
+/// - An empty / absent `path` returns the "This PC" pseudo-view that lists
+///   every mounted drive letter as a dir entry. Lets users pick D:, E:, etc.
+/// - `parent` of a drive root (`C:\`) is `Some("")` (the drives-view marker)
+///   instead of `None`, so the UI's "up" button can take the user there.
+/// - `fs::canonicalize` returns the verbatim form `\\?\C:\…`; we strip that
+///   prefix so displayed paths look natural.
 pub async fn browse(
     axum::extract::Query(q): axum::extract::Query<BrowseQuery>,
 ) -> Result<Json<BrowseResponse>, (StatusCode, String)> {
+    // Drives view: Windows with no path or explicit empty path.
+    #[cfg(windows)]
+    {
+        let empty = q
+            .path
+            .as_ref()
+            .map(|p| p.as_os_str().is_empty())
+            .unwrap_or(true);
+        if empty {
+            return Ok(Json(BrowseResponse {
+                current: PathBuf::new(),
+                parent: None,
+                dirs: windows_drives(),
+                files: vec![],
+            }));
+        }
+    }
+
     // Default landing: /mnt on WSL (so users see /mnt/c, /mnt/d at a glance);
     // home dir elsewhere.
     let target = q.path.unwrap_or_else(|| {
@@ -383,7 +409,7 @@ pub async fn browse(
     });
 
     let canonical = match std::fs::canonicalize(&target) {
-        Ok(p) => p,
+        Ok(p) => strip_verbatim_prefix(p),
         Err(e) => return Err((StatusCode::BAD_REQUEST, format!("{}: {e}", target.display()))),
     };
 
@@ -419,13 +445,60 @@ pub async fn browse(
     dirs.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
     files.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
 
-    let parent = canonical.parent().map(|p| p.to_path_buf());
+    // `mut` is only needed under cfg(windows) below; allow on other targets.
+    #[allow(unused_mut)]
+    let mut parent = canonical.parent().map(|p| p.to_path_buf());
+    #[cfg(windows)]
+    if parent.is_none() && is_drive_root(&canonical) {
+        // Take the user up to the drives view instead of dead-ending.
+        parent = Some(PathBuf::new());
+    }
+
     Ok(Json(BrowseResponse {
         current: canonical,
         parent,
         dirs,
         files,
     }))
+}
+
+/// Strip Windows' verbatim/extended-length prefix (`\\?\`) and the UNC variant
+/// (`\\?\UNC\server\share` → `\\server\share`). No-op on non-Windows.
+#[cfg(windows)]
+fn strip_verbatim_prefix(p: PathBuf) -> PathBuf {
+    let s = p.to_string_lossy().into_owned();
+    if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{rest}"));
+    }
+    if let Some(rest) = s.strip_prefix(r"\\?\") {
+        return PathBuf::from(rest);
+    }
+    p
+}
+#[cfg(not(windows))]
+fn strip_verbatim_prefix(p: PathBuf) -> PathBuf { p }
+
+#[cfg(windows)]
+fn is_drive_root(p: &std::path::Path) -> bool {
+    // "C:\", "D:\" etc. — 3 chars, second is ':', last is '\\'.
+    p.to_str().is_some_and(|s| {
+        let b = s.as_bytes();
+        b.len() == 3 && b[1] == b':' && b[2] == b'\\'
+    })
+}
+
+/// Enumerate mounted drive letters by probing A:\…Z:\. Cheap (26 stat calls)
+/// and avoids pulling in `winapi`/`windows` for one feature.
+#[cfg(windows)]
+fn windows_drives() -> Vec<BrowseEntry> {
+    let mut out = Vec::new();
+    for letter in b'A'..=b'Z' {
+        let s = format!("{}:\\", letter as char);
+        if std::path::Path::new(&s).is_dir() {
+            out.push(BrowseEntry { name: s.clone(), path: PathBuf::from(s) });
+        }
+    }
+    out
 }
 
 pub async fn get_run(

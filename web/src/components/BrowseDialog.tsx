@@ -86,8 +86,12 @@ export function BrowseDialog({
     setSelected(allSelected ? new Set() : new Set(data.files.map((f) => f.path)));
   }
 
+  // `data.parent === ""` is a valid target on Windows (= the drives view),
+  // so only `undefined`/`null` means "no parent".
+  const hasParent = data?.parent !== undefined && data?.parent !== null;
+
   function goUp() {
-    if (data?.parent) load(data.parent);
+    if (hasParent) load(data!.parent as string);
   }
 
   function confirm() {
@@ -136,7 +140,7 @@ export function BrowseDialog({
             variant="outline"
             size="sm"
             onClick={goUp}
-            disabled={!data?.parent}
+            disabled={!hasParent}
           >
             <ArrowUp className="h-4 w-4" />
           </Button>
@@ -150,7 +154,7 @@ export function BrowseDialog({
               }
             }}
             className="font-mono text-xs h-8"
-            placeholder="/path"
+            placeholder={data?.current === "" ? m.browse.thisPc : "/path"}
           />
           <Button size="sm" variant="outline" onClick={() => load(pathInput)}>
             Go

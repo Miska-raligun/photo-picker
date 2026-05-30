@@ -53,7 +53,12 @@ export const api = {
   },
 
   async browse(path?: string): Promise<BrowseResponse> {
-    const qs = path ? `?path=${encodeURIComponent(path)}` : "";
+    // `path === ""` is meaningful on Windows (= "This PC" drives view), so
+    // pass it through explicitly instead of treating empty as omitted.
+    const qs =
+      path !== undefined
+        ? `?path=${encodeURIComponent(path)}`
+        : "";
     return request(`/api/browse${qs}`);
   },
 
