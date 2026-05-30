@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import {
+  Check,
   ChevronLeft,
   ChevronRight,
   ExternalLink,
@@ -9,6 +10,7 @@ import {
   Plus,
   RotateCcw,
   Sparkles,
+  Trash2,
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -40,6 +42,8 @@ export interface LightboxFinalScore {
 export interface LightboxDetails {
   /// Algorithm verdict — true if this photo was in `pick.kept`.
   kept: boolean;
+  /// Whether the user has flipped the verdict for this photo.
+  overridden: boolean;
   /// 1-based rank inside the composition group (display order: kept first,
   /// then rejected).
   algoRank: number;
@@ -69,6 +73,14 @@ interface Props {
   /// Per-photo details for the right-hand info panel. Pass null when not
   /// available (e.g. preview-only contexts).
   details?: LightboxDetails | null;
+  /// In-place mode — whether the keep/drop verdict can be flipped here.
+  /// (Mirrors `RunRecord.in_place`; only meaningful when `details` and
+  /// `onToggleVerdict` are also set.)
+  inPlace?: boolean;
+  /// Flip the current photo's verdict. Same callback that the photo card
+  /// uses; called without arguments because the lightbox already knows the
+  /// "current photo" via the parent's lightbox-index state.
+  onToggleVerdict?: () => void;
 }
 
 const ZOOM_MIN = 1;
@@ -106,6 +118,8 @@ export function Lightbox({
   onNext,
   position,
   details,
+  inPlace,
+  onToggleVerdict,
 }: Props) {
   const m = useM();
   const [loaded, setLoaded] = useState(false);
@@ -157,6 +171,12 @@ export function Lightbox({
           e.preventDefault();
           setShowDetails((v) => !v);
         }
+      } else if (e.key === " " || e.key === "Spacebar") {
+        // Space: flip the current photo's keep/drop verdict (in-place mode).
+        if (inPlace && onToggleVerdict) {
+          e.preventDefault();
+          onToggleVerdict();
+        }
       } else if (scale > 1) {
         // Zoomed → arrows pan (existing behavior).
         const step = 60;
@@ -178,7 +198,7 @@ export function Lightbox({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, scale, onPrev, onNext, details]);
+  }, [open, scale, onPrev, onNext, details, inPlace, onToggleVerdict]);
 
   /// Zoom by `factor` around `anchor` in container coords. When anchor is
   /// null, zooms around the container center (i.e. keeps the image centered).
@@ -327,6 +347,15 @@ export function Lightbox({
                   </Button>
                 )}
               </div>
+              {inPlace && details && onToggleVerdict && (
+                <VerdictToggle
+                  willKeep={details.overridden ? !details.kept : details.kept}
+                  overridden={details.overridden}
+                  onClick={onToggleVerdict}
+                  keepLabel={m.detail.lightboxKeep}
+                  dropLabel={m.detail.lightboxDrop}
+                />
+              )}
               {details && (
                 <Button
                   variant="ghost"
@@ -631,5 +660,48 @@ function ScoreRow({
         {Math.round(value * 100)}
       </span>
     </div>
+  );
+}
+
+/// Top-bar verdict toggle. Pill-shaped, color-coded by the resolved final
+/// state (green = will keep, red = will delete). When the user has flipped
+/// the algorithm's verdict, shows a small dot to make the override explicit.
+function VerdictToggle({
+  willKeep,
+  overridden,
+  onClick,
+  keepLabel,
+  dropLabel,
+}: {
+  willKeep: boolean;
+  overridden: boolean;
+  onClick: () => void;
+  keepLabel: string;
+  dropLabel: string;
+}) {
+  const label = willKeep ? keepLabel : dropLabel;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={`${label} (Space)`}
+      aria-label={label}
+      className={cn(
+        "relative inline-flex items-center gap-1.5 h-8 px-3 rounded-md text-xs font-semibold uppercase tracking-wider text-white shadow-sm transition-colors",
+        willKeep
+          ? "bg-[var(--success)] hover:brightness-110"
+          : "bg-destructive hover:brightness-110"
+      )}
+    >
+      {willKeep ? <Check className="h-4 w-4" /> : <Trash2 className="h-4 w-4" />}
+      <span>{label}</span>
+      {overridden && (
+        <span
+          aria-hidden
+          className="absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-white ring-2 ring-black/40"
+          title="override"
+        />
+      )}
+    </button>
   );
 }

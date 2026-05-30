@@ -427,12 +427,19 @@ export function GroupDetailDialog({
               open && photo && photo.final_score && cur
                 ? {
                     kept: cur.kept,
+                    overridden: overrides.has(photo.photo_id),
                     algoRank: (lightboxIndex as number) + 1,
                     finalScore: photo.final_score,
                     aiRank: aiAnn?.rank,
                     aiReason: aiAnn?.reason,
                   }
                 : null
+            }
+            inPlace={inPlace}
+            onToggleVerdict={
+              open && inPlace && photo
+                ? () => onToggleOverride(photo.photo_id)
+                : undefined
             }
           />
         );
