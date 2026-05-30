@@ -1,5 +1,6 @@
 mod decoder;
 mod exif;
+mod raw_preview;
 mod scanner;
 
 pub use decoder::{decode_thumbnail, decode_thumbnail_for, encode_jpeg, ThumbnailSpec};

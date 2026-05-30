@@ -44,6 +44,10 @@ axum              = "0.7"
 tokio             = { version = "1", features = ["rt-multi-thread", "macros", "fs", "sync"] }
 tower             = "0.5"
 tower-http        = { version = "0.6", features = ["trace", "cors"] }
+# RAW preview extraction (LGPL-2.1) — handles vendor MakerNote layouts so
+# Nikon NEFs etc. resolve their largest embedded JPEG without our brittle
+# EXIF-walk-then-byte-scan fallback. See LICENSES/LGPL-2.1.txt.
+rawler            = "0.7"
 tokio-stream      = { version = "0.1", features = ["sync"] }
 futures-util      = "0.3"
 trash             = "5"

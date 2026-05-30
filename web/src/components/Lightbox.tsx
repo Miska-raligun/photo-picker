@@ -1,8 +1,54 @@
 import { useEffect, useRef, useState } from "react";
 import { Dialog as DialogPrimitive } from "radix-ui";
-import { ExternalLink, Minus, Plus, RotateCcw, X } from "lucide-react";
+import {
+  ChevronLeft,
+  ChevronRight,
+  ExternalLink,
+  Info,
+  Minus,
+  Plus,
+  RotateCcw,
+  Sparkles,
+  X,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { useM } from "@/lib/i18n";
+import { cn } from "@/lib/utils";
+
+/// Per-scene weights — mirrors `FinalWeights::for_scene` in the Rust core
+/// so the details panel can grey out terms that don't contribute (e.g.
+/// `face_bonus` for landscape) and highlight the dominant contributor.
+const SCENE_WEIGHTS: Record<
+  string,
+  { tech: number; aesthetic: number; composition: number; face_bonus: number }
+> = {
+  portrait: { tech: 0.3, aesthetic: 0.2, composition: 0.15, face_bonus: 0.35 },
+  landscape: { tech: 0.35, aesthetic: 0.4, composition: 0.25, face_bonus: 0 },
+  mixed: { tech: 0.32, aesthetic: 0.3, composition: 0.2, face_bonus: 0.18 },
+};
+
+export interface LightboxFinalScore {
+  scene: string;
+  tech: number;
+  aesthetic: number;
+  composition: number;
+  face_bonus: number;
+  value: number;
+}
+
+export interface LightboxDetails {
+  /// Algorithm verdict — true if this photo was in `pick.kept`.
+  kept: boolean;
+  /// 1-based rank inside the composition group (display order: kept first,
+  /// then rejected).
+  algoRank: number;
+  finalScore: LightboxFinalScore;
+  /// VLM's independent rank, if a VLM analysis has been run.
+  aiRank?: number;
+  /// One-sentence reason from the VLM.
+  aiReason?: string;
+}
 
 interface Props {
   open: boolean;
@@ -13,6 +59,16 @@ interface Props {
   /// blank spinner, especially for RAW where the preview can take seconds.
   thumbUrl?: string | null;
   filename: string | null;
+  /// Navigation within the surrounding group. Both `onPrev` and `onNext`
+  /// may be undefined to disable the corresponding control (e.g. at the
+  /// first/last photo, or when there is no group context).
+  onPrev?: () => void;
+  onNext?: () => void;
+  /// "3 / 8" position indicator. Optional — omitted ⇒ no counter.
+  position?: { index: number; total: number };
+  /// Per-photo details for the right-hand info panel. Pass null when not
+  /// available (e.g. preview-only contexts).
+  details?: LightboxDetails | null;
 }
 
 const ZOOM_MIN = 1;
@@ -20,20 +76,41 @@ const ZOOM_MAX = 8;
 const WHEEL_STEP = 0.0015;
 const DOUBLE_CLICK_ZOOM = 2.5;
 
-/// Full-viewport image preview with zoom + pan.
+/// Full-viewport image preview with zoom, pan, group navigation, and an
+/// optional details panel.
 ///
+/// Image controls:
 /// - Mouse wheel: zoom in/out anchored at the cursor
 /// - Drag (when zoomed): pan
 /// - Double-click: toggle 1× ↔ 2.5× anchored at the cursor
 /// - + / – / 0 keys: zoom in / out / reset
 /// - Buttons on the top bar: zoom in / out / reset
 ///
-/// Built on Radix Dialog primitives so ESC/outside-click routing works
+/// Navigation:
+/// - ← / → keys, on-screen chevrons on the image edges (only at 1× zoom so
+///   they don't interfere with pan)
+///
+/// Details panel:
+/// - 'I' key or the info button toggles a right-side overlay showing the
+///   algorithm verdict + scene-weighted score breakdown + VLM annotation.
+///
+/// Built on Radix Dialog primitives so ESC / outside-click routing works
 /// when stacked over the parent dialog.
-export function Lightbox({ open, onOpenChange, previewUrl, thumbUrl, filename }: Props) {
+export function Lightbox({
+  open,
+  onOpenChange,
+  previewUrl,
+  thumbUrl,
+  filename,
+  onPrev,
+  onNext,
+  position,
+  details,
+}: Props) {
   const m = useM();
   const [loaded, setLoaded] = useState(false);
   const [errored, setErrored] = useState(false);
+  const [showDetails, setShowDetails] = useState(false);
 
   // Zoom + pan state. (x, y) is the image's translation in screen pixels
   // BEFORE the scale is applied (transform-origin: center). Reset whenever
@@ -50,16 +127,20 @@ export function Lightbox({ open, onOpenChange, previewUrl, thumbUrl, filename }:
     setPos({ x: 0, y: 0 });
   };
 
-  // Reset on new image or close.
+  // Reset on new image / open. Loading state too — a re-render with a new
+  // previewUrl means we're waiting on a fresh decode.
   useEffect(() => {
-    if (open) resetZoom();
+    if (open) {
+      setLoaded(false);
+      setErrored(false);
+      resetZoom();
+    }
   }, [open, previewUrl]);
 
-  // Keyboard: + / - / 0 / arrow pan when zoomed.
+  // Keyboard: + / - / 0 / arrow nav / arrow pan / 'i' details.
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      // Ignore if focus is in an input (none here today, defensive).
       const tag = (e.target as HTMLElement | null)?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA") return;
       if (e.key === "+" || e.key === "=") {
@@ -71,18 +152,33 @@ export function Lightbox({ open, onOpenChange, previewUrl, thumbUrl, filename }:
       } else if (e.key === "0") {
         e.preventDefault();
         resetZoom();
+      } else if (e.key === "i" || e.key === "I") {
+        if (details) {
+          e.preventDefault();
+          setShowDetails((v) => !v);
+        }
       } else if (scale > 1) {
+        // Zoomed → arrows pan (existing behavior).
         const step = 60;
         if (e.key === "ArrowLeft") setPos((p) => ({ ...p, x: p.x + step }));
         else if (e.key === "ArrowRight") setPos((p) => ({ ...p, x: p.x - step }));
         else if (e.key === "ArrowUp") setPos((p) => ({ ...p, y: p.y + step }));
         else if (e.key === "ArrowDown") setPos((p) => ({ ...p, y: p.y - step }));
+      } else {
+        // Not zoomed → ← / → navigate within the group.
+        if (e.key === "ArrowLeft" && onPrev) {
+          e.preventDefault();
+          onPrev();
+        } else if (e.key === "ArrowRight" && onNext) {
+          e.preventDefault();
+          onNext();
+        }
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, scale]);
+  }, [open, scale, onPrev, onNext, details]);
 
   /// Zoom by `factor` around `anchor` in container coords. When anchor is
   /// null, zooms around the container center (i.e. keeps the image centered).
@@ -95,8 +191,6 @@ export function Lightbox({ open, onOpenChange, previewUrl, thumbUrl, filename }:
       if (next === s) return s;
       const k = next / s;
       setPos((p) => ({ x: cx - (cx - p.x) * k, y: cy - (cy - p.y) * k }));
-      // If we just zoomed back to 1, snap pan back to (0, 0) so the image
-      // re-centers exactly.
       if (Math.abs(next - 1) < 1e-3) {
         setPos({ x: 0, y: 0 });
       }
@@ -121,8 +215,6 @@ export function Lightbox({ open, onOpenChange, previewUrl, thumbUrl, filename }:
   }
 
   function onPointerDown(e: React.PointerEvent) {
-    // Only drag when zoomed in — at 1× we want clicks-on-backdrop to close
-    // via Radix (outside-click on the actual Content boundary).
     if (scale <= 1) return;
     if (e.button !== 0) return;
     dragOrigin.current = {
@@ -167,6 +259,7 @@ export function Lightbox({ open, onOpenChange, previewUrl, thumbUrl, filename }:
         if (!v) {
           setLoaded(false);
           setErrored(false);
+          setShowDetails(false);
           resetZoom();
         }
         onOpenChange(v);
@@ -177,25 +270,27 @@ export function Lightbox({ open, onOpenChange, previewUrl, thumbUrl, filename }:
         <DialogPrimitive.Content
           className="fixed inset-0 z-[201] flex items-center justify-center p-4 outline-none"
           onOpenAutoFocus={(e) => e.preventDefault()}
-          // When zoomed in, pointer-down on the content shouldn't bubble
-          // into Radix's outside-click detector (we want to pan, not close).
           onPointerDownOutside={(e) => {
             if (zoomed) e.preventDefault();
           }}
         >
-          {/* sr-only title for a11y */}
           <DialogPrimitive.Title className="sr-only">
             {filename ?? "preview"}
           </DialogPrimitive.Title>
 
           {/* Top bar */}
           <div className="absolute top-4 left-4 right-4 flex items-center justify-between gap-2 text-white z-10">
-            <div className="font-mono text-xs sm:text-sm truncate max-w-[60vw] bg-black/40 px-2 py-1 rounded">
-              {filename ?? ""}
+            <div className="flex items-center gap-2 min-w-0">
+              <div className="font-mono text-xs sm:text-sm truncate max-w-[40vw] bg-black/40 px-2 py-1 rounded">
+                {filename ?? ""}
+              </div>
+              {position && (
+                <div className="font-mono text-xs tabular-nums bg-black/40 px-2 py-1 rounded shrink-0">
+                  {position.index + 1} / {position.total}
+                </div>
+              )}
             </div>
             <div className="flex items-center gap-1.5">
-              {/* Zoom controls — always rendered so the user discovers them
-                  without needing to know wheel/double-click. */}
               <div className="flex items-center bg-black/40 rounded">
                 <Button
                   variant="ghost"
@@ -232,6 +327,21 @@ export function Lightbox({ open, onOpenChange, previewUrl, thumbUrl, filename }:
                   </Button>
                 )}
               </div>
+              {details && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className={cn(
+                    "text-white hover:bg-white/10",
+                    showDetails && "bg-white/15"
+                  )}
+                  onClick={() => setShowDetails((v) => !v)}
+                  aria-label={m.detail.toggleDetails}
+                  title={m.detail.toggleDetails + " (I)"}
+                >
+                  <Info className="h-4 w-4" />
+                </Button>
+              )}
               {previewUrl && (
                 <Button
                   asChild
@@ -258,9 +368,7 @@ export function Lightbox({ open, onOpenChange, previewUrl, thumbUrl, filename }:
             </div>
           </div>
 
-          {/* Image area — blur-up: while the full preview decodes, show the
-              already-loaded thumbnail blurred + scaled as a backdrop.
-              Zoom + pan are applied via transform on the inner wrapper. */}
+          {/* Image area — blur-up + transform-based zoom/pan. */}
           <div
             ref={containerRef}
             className="relative w-[96vw] h-[88vh] flex items-center justify-center overflow-hidden touch-none"
@@ -277,14 +385,6 @@ export function Lightbox({ open, onOpenChange, previewUrl, thumbUrl, filename }:
                 alt=""
                 aria-hidden
                 className="absolute max-w-[96vw] max-h-[88vh] object-contain rounded-md shadow-2xl blur-md scale-105 opacity-90 pointer-events-none"
-              />
-            )}
-            {/* No thumbnail to blur-up yet: soft shimmer placeholder so the
-                preview never opens to an empty void. */}
-            {!loaded && !errored && !thumbUrl && (
-              <div
-                aria-hidden
-                className="shimmer absolute w-[60vw] h-[70vh] max-w-[96vw] max-h-[88vh] rounded-md opacity-20"
               />
             )}
             {errored && (
@@ -305,7 +405,40 @@ export function Lightbox({ open, onOpenChange, previewUrl, thumbUrl, filename }:
                 }`}
               />
             )}
+
+            {/* Prev/next chevrons — only at 1× zoom so they don't interfere
+                with panning. Hidden when the corresponding handler is unset. */}
+            {!zoomed && onPrev && (
+              <button
+                type="button"
+                onClick={onPrev}
+                aria-label="previous"
+                className="absolute left-2 top-1/2 -translate-y-1/2 h-12 w-12 grid place-items-center rounded-full bg-black/40 text-white hover:bg-black/60 transition-colors pointer-events-auto"
+              >
+                <ChevronLeft className="h-6 w-6" />
+              </button>
+            )}
+            {!zoomed && onNext && (
+              <button
+                type="button"
+                onClick={onNext}
+                aria-label="next"
+                className="absolute right-2 top-1/2 -translate-y-1/2 h-12 w-12 grid place-items-center rounded-full bg-black/40 text-white hover:bg-black/60 transition-colors pointer-events-auto"
+              >
+                <ChevronRight className="h-6 w-6" />
+              </button>
+            )}
           </div>
+
+          {/* Details panel — slides in from the right when toggled. Sits
+              above the image (z-20) so it overlays without resizing it. */}
+          {details && showDetails && (
+            <DetailsPanel
+              details={details}
+              filename={filename}
+              onClose={() => setShowDetails(false)}
+            />
+          )}
 
           <div className="absolute bottom-4 left-1/2 -translate-x-1/2 text-white/60 text-xs select-none">
             {m.detail.lightboxHint}
@@ -313,5 +446,190 @@ export function Lightbox({ open, onOpenChange, previewUrl, thumbUrl, filename }:
         </DialogPrimitive.Content>
       </DialogPrimitive.Portal>
     </DialogPrimitive.Root>
+  );
+}
+
+/// Right-side floating panel rendered above the image when toggled.
+/// Matches the lightbox's translucent-black aesthetic; scrolls if it
+/// outgrows the viewport on small screens.
+function DetailsPanel({
+  details,
+  filename,
+  onClose,
+}: {
+  details: LightboxDetails;
+  filename: string | null;
+  onClose: () => void;
+}) {
+  const m = useM();
+  const fs = details.finalScore;
+  const weights = SCENE_WEIGHTS[fs.scene] ?? SCENE_WEIGHTS.mixed;
+  const components = [
+    { key: "tech", label: m.detail.scoreTech, value: fs.tech, weight: weights.tech },
+    { key: "aesthetic", label: m.detail.scoreAesthetic, value: fs.aesthetic, weight: weights.aesthetic },
+    {
+      key: "composition",
+      label: m.detail.scoreComposition,
+      value: fs.composition,
+      weight: weights.composition,
+    },
+    {
+      key: "face_bonus",
+      label: m.detail.scoreFaceBonus,
+      value: fs.face_bonus,
+      weight: weights.face_bonus,
+    },
+  ];
+  let dominant = "";
+  let best = -1;
+  for (const c of components) {
+    const contrib = c.value * c.weight;
+    if (contrib > best) {
+      best = contrib;
+      dominant = c.key;
+    }
+  }
+  return (
+    <div className="absolute top-20 right-4 z-20 w-[300px] max-h-[calc(88vh-1rem)] overflow-y-auto rounded-lg bg-black/65 backdrop-blur-md text-white shadow-2xl border border-white/10">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-white/10">
+        <span className="text-sm font-semibold">{m.detail.detailsTitle}</span>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="close details"
+          className="text-white/70 hover:text-white"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+
+      <div className="px-4 py-3 space-y-4 text-sm">
+        {/* Verdict + ranks */}
+        <div className="space-y-2">
+          {filename && (
+            <div className="font-mono text-xs text-white/60 break-all">{filename}</div>
+          )}
+          <div className="flex flex-wrap items-center gap-1.5">
+            <Badge
+              className={cn(
+                "text-[0.65rem] font-semibold uppercase tracking-wider",
+                details.kept
+                  ? "bg-[var(--success)] text-white"
+                  : "bg-foreground/40 text-background"
+              )}
+            >
+              {details.kept ? m.detail.verdictWillKeep : m.detail.verdictWillDrop}
+            </Badge>
+            <Badge
+              variant="outline"
+              className="text-[0.65rem] font-mono border-white/20 text-white/80"
+            >
+              {fs.scene}
+            </Badge>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2 text-xs">
+            <div className="rounded bg-white/5 px-2.5 py-2">
+              <div className="text-white/50 text-[0.65rem] uppercase tracking-wider">
+                {m.detail.algoRank}
+              </div>
+              <div className="font-mono tabular-nums text-base">#{details.algoRank}</div>
+            </div>
+            <div className="rounded bg-white/5 px-2.5 py-2">
+              <div className="text-white/50 text-[0.65rem] uppercase tracking-wider flex items-center gap-1">
+                <Sparkles className="h-3 w-3" />
+                {m.detail.aiRank}
+              </div>
+              <div className="font-mono tabular-nums text-base">
+                {details.aiRank != null ? `#${details.aiRank}` : "—"}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Score breakdown */}
+        <div className="space-y-2">
+          <div className="flex items-baseline justify-between">
+            <span className="text-white/60 text-xs font-mono">
+              {m.detail.scoreFinal}
+            </span>
+            <span className="font-mono font-semibold text-primary text-lg tabular-nums">
+              {Math.round(fs.value * 100)}
+            </span>
+          </div>
+          <div className="space-y-1.5">
+            {components.map((c) => (
+              <ScoreRow
+                key={c.key}
+                label={c.label}
+                value={c.value}
+                disabled={c.weight === 0}
+                dominant={c.key === dominant && c.weight > 0}
+              />
+            ))}
+          </div>
+        </div>
+
+        {/* AI reason */}
+        {details.aiReason && (
+          <div className="space-y-1.5 pt-2 border-t border-white/10">
+            <div className="text-white/60 text-xs font-mono flex items-center gap-1">
+              <Sparkles className="h-3 w-3" />
+              {m.detail.aiReasonLabel}
+            </div>
+            <p className="text-xs leading-relaxed text-white/85 whitespace-pre-wrap">
+              {details.aiReason}
+            </p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ScoreRow({
+  label,
+  value,
+  disabled,
+  dominant,
+}: {
+  label: string;
+  value: number;
+  disabled: boolean;
+  dominant: boolean;
+}) {
+  const pct = Math.max(0, Math.min(100, value * 100));
+  return (
+    <div className="flex items-center gap-2 text-[0.7rem] font-mono">
+      <span
+        className={cn(
+          "w-16 shrink-0",
+          disabled ? "text-white/30 line-through" : "text-white/60"
+        )}
+      >
+        {label}
+      </span>
+      <div className="flex-1 h-1.5 rounded-full bg-white/10 overflow-hidden">
+        <div
+          className={cn(
+            "h-full transition-[width] duration-300 ease-out",
+            disabled
+              ? "bg-white/20"
+              : dominant
+              ? "bg-primary"
+              : "bg-white/55"
+          )}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+      <span
+        className={cn(
+          "tabular-nums w-7 text-right",
+          disabled ? "text-white/30" : "text-white/80"
+        )}
+      >
+        {Math.round(value * 100)}
+      </span>
+    </div>
   );
 }

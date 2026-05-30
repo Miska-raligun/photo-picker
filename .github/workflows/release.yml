@@ -82,6 +82,9 @@ jobs:
           mkdir -p staging/photo-pick
           cp "target/release/${{ matrix.bin }}" staging/photo-pick/
           cp packaging/README.md staging/photo-pick/
+          # Ship third-party license texts (currently LGPL-2.1 for rawler) so
+          # binary distribution complies with the LGPL Section 6 requirement.
+          cp -r LICENSES staging/photo-pick/
           if [ "${{ runner.os }}" = "Windows" ]; then
             cp packaging/run.bat staging/photo-pick/
           else

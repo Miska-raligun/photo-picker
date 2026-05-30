@@ -39,16 +39,28 @@ fn decode_thumbnail_with_format(
 ) -> Result<DynamicImage> {
     let img = match format {
         ImageFormat::Jpeg => decode_image_file(path)?,
-        ImageFormat::Raw(kind) => {
-            if !kind.is_tiff_container() {
-                return Err(Error::Config(format!(
-                    "RAW format {:?} not supported in M2 (CR3/RAF need a dedicated parser)",
-                    kind
-                )));
+        ImageFormat::Raw(_kind) => {
+            // Primary: rawler — knows each vendor's MakerNote layout, so the
+            // largest embedded preview (often full-res JPEG) comes out cleanly
+            // for NEF/ARW/CR2/CR3/RAF/ORF/DNG/… without our brittle byte-scan
+            // fallback. Drops the per-kind container restriction since rawler
+            // covers CR3/RAF (ISO-BMFF and Fuji-specific containers) too.
+            match super::raw_preview::extract_embedded_preview(path) {
+                Ok(img) => img,
+                Err(rawler_err) => {
+                    // Legacy fallback: EXIF SubIFD JPEG, then a raw byte scan
+                    // for SOI/EOI markers. Keep for any oddball format rawler
+                    // doesn't recognize on this build.
+                    tracing::debug!(
+                        path = %path.display(),
+                        %rawler_err,
+                        "rawler preview failed; falling back to EXIF/byte-scan"
+                    );
+                    let jpeg_bytes = extract_tiff_preview_jpeg(path)?;
+                    image::load_from_memory_with_format(&jpeg_bytes, image::ImageFormat::Jpeg)
+                        .map_err(|e| Error::Decode { path: path.to_path_buf(), source: e })?
+                }
             }
-            let jpeg_bytes = extract_tiff_preview_jpeg(path)?;
-            image::load_from_memory_with_format(&jpeg_bytes, image::ImageFormat::Jpeg)
-                .map_err(|e| Error::Decode { path: path.to_path_buf(), source: e })?
         }
     };
     // Upright the image per its EXIF orientation before downscaling. Cameras

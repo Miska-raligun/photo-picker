@@ -80,11 +80,11 @@ export function GroupDetailDialog({
   const [vlmLoading, setVlmLoading] = useState(false);
   const [vlmResult, setVlmResult] = useState<ExplanationRecord | null>(null);
   const [vlmError, setVlmError] = useState<string | null>(null);
-  const [lightbox, setLightbox] = useState<{
-    url: string;
-    name: string;
-    thumbUrl?: string;
-  } | null>(null);
+  // Index into the (kept ++ rejected) display order for the currently-open
+  // lightbox. `null` ⇒ closed. Holding an index (not a frozen url/name) lets
+  // us drive prev/next + AI annotations + score breakdown straight from the
+  // current pick without resyncing on every change.
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
 
   useEffect(() => {
     if (!open || !runId) return;
@@ -114,7 +114,7 @@ export function GroupDetailDialog({
   // ←/→ step between groups. Skip when the lightbox is open (it owns arrows for
   // panning) or focus sits in a form control (provider <select>, etc.).
   useEffect(() => {
-    if (!open || lightbox) return;
+    if (!open || lightboxIndex !== null) return;
     const onKey = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement | null)?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
@@ -128,7 +128,7 @@ export function GroupDetailDialog({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, lightbox, canPrev, canNext, onNavigate]);
+  }, [open, lightboxIndex, canPrev, canNext, onNavigate]);
 
   async function askVlm() {
     if (!runId || pickIndex == null) return;
@@ -183,6 +183,19 @@ export function GroupDetailDialog({
     }
     return map.size > 0 ? map : null;
   }, [vlmResult]);
+
+  // Combined kept-first display list — used both for rendering cards and
+  // for resolving the lightbox photo + per-card AI annotations by index.
+  const displayList = useMemo(
+    () =>
+      pick
+        ? [
+            ...pick.kept.map((p) => ({ p, kept: true })),
+            ...pick.rejected.map((p) => ({ p, kept: false })),
+          ]
+        : [],
+    [pick]
+  );
 
   const total = pick ? pick.kept.length + pick.rejected.length : 0;
   // Final "will be kept" count after user flips: algo-kept minus flipped-kept,
@@ -255,10 +268,7 @@ export function GroupDetailDialog({
           {!loading && pick && runId && (
             <ScrollArea className="flex-1 w-full min-h-0">
               <div className="flex gap-4 px-6 py-4 w-max">
-                {[
-                  ...pick.kept.map((p) => ({ p, kept: true })),
-                  ...pick.rejected.map((p) => ({ p, kept: false })),
-                ].map(({ p, kept }, i) => (
+                {displayList.map(({ p, kept }, i) => (
                   <PhotoCard
                     key={p.photo_id}
                     runId={runId}
@@ -269,13 +279,7 @@ export function GroupDetailDialog({
                     aiRank={aiAnnotations?.get(i + 1)?.rank}
                     aiReason={aiAnnotations?.get(i + 1)?.reason}
                     onToggleOverride={() => onToggleOverride(p.photo_id)}
-                    onViewOriginal={() =>
-                      setLightbox({
-                        url: api.previewUrl(runId, p.photo_id),
-                        name: p.filename ?? p.photo_id,
-                        thumbUrl: api.thumbUrl(runId, p.photo_id),
-                      })
-                    }
+                    onViewOriginal={() => setLightboxIndex(i)}
                   />
                 ))}
               </div>
@@ -383,13 +387,56 @@ export function GroupDetailDialog({
         </div>
       </DialogContent>
 
-      <Lightbox
-        open={lightbox !== null}
-        onOpenChange={(v) => !v && setLightbox(null)}
-        previewUrl={lightbox?.url ?? null}
-        thumbUrl={lightbox?.thumbUrl ?? null}
-        filename={lightbox?.name ?? null}
-      />
+      {(() => {
+        const open = lightboxIndex !== null && runId !== null && pick != null;
+        const cur = open
+          ? displayList[lightboxIndex as number]
+          : undefined;
+        const photo = cur?.p;
+        const aiAnn =
+          lightboxIndex != null && aiAnnotations
+            ? aiAnnotations.get((lightboxIndex as number) + 1)
+            : undefined;
+        return (
+          <Lightbox
+            open={open}
+            onOpenChange={(v) => !v && setLightboxIndex(null)}
+            previewUrl={
+              open && photo ? api.previewUrl(runId as string, photo.photo_id) : null
+            }
+            thumbUrl={
+              open && photo ? api.thumbUrl(runId as string, photo.photo_id) : null
+            }
+            filename={photo?.filename ?? photo?.photo_id ?? null}
+            position={
+              open
+                ? { index: lightboxIndex as number, total: displayList.length }
+                : undefined
+            }
+            onPrev={
+              open && (lightboxIndex as number) > 0
+                ? () => setLightboxIndex((i) => (i != null ? i - 1 : i))
+                : undefined
+            }
+            onNext={
+              open && (lightboxIndex as number) < displayList.length - 1
+                ? () => setLightboxIndex((i) => (i != null ? i + 1 : i))
+                : undefined
+            }
+            details={
+              open && photo && photo.final_score && cur
+                ? {
+                    kept: cur.kept,
+                    algoRank: (lightboxIndex as number) + 1,
+                    finalScore: photo.final_score,
+                    aiRank: aiAnn?.rank,
+                    aiReason: aiAnn?.reason,
+                  }
+                : null
+            }
+          />
+        );
+      })()}
     </Dialog>
   );
 }
