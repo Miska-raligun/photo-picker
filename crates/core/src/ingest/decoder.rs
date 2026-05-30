@@ -40,26 +40,23 @@ fn decode_thumbnail_with_format(
     let img = match format {
         ImageFormat::Jpeg => decode_image_file(path)?,
         ImageFormat::Raw(_kind) => {
-            // Primary: rawler — knows each vendor's MakerNote layout, so the
-            // largest embedded preview (often full-res JPEG) comes out cleanly
-            // for NEF/ARW/CR2/CR3/RAF/ORF/DNG/… without our brittle byte-scan
-            // fallback. Drops the per-kind container restriction since rawler
-            // covers CR3/RAF (ISO-BMFF and Fuji-specific containers) too.
-            match super::raw_preview::extract_embedded_preview(path) {
-                Ok(img) => img,
-                Err(rawler_err) => {
-                    // Legacy fallback: EXIF SubIFD JPEG, then a raw byte scan
-                    // for SOI/EOI markers. Keep for any oddball format rawler
-                    // doesn't recognize on this build.
-                    tracing::debug!(
-                        path = %path.display(),
-                        %rawler_err,
-                        "rawler preview failed; falling back to EXIF/byte-scan"
-                    );
-                    let jpeg_bytes = extract_tiff_preview_jpeg(path)?;
-                    image::load_from_memory_with_format(&jpeg_bytes, image::ImageFormat::Jpeg)
-                        .map_err(|e| Error::Decode { path: path.to_path_buf(), source: e })?
-                }
+            // Three-tier RAW decode, cheapest first:
+            //   1. rawler embedded preview (ms, vendor-aware)
+            //   2. legacy EXIF SubIFD JPEG + byte-scan (ms, format-agnostic)
+            //   3. rawler full sensor demosaic (~1 s, but guaranteed to produce
+            //      *something* for any RAW rawler can decode at all)
+            // The DAC/arithmetic-coded NEF thumbnails the pure-Rust JPEG
+            // decoder can't read fail at step 2; step 3 catches them.
+            if let Ok(img) = super::raw_preview::extract_embedded_preview(path) {
+                img
+            } else if let Some(img) = decode_jpeg_via_tiff_scan(path) {
+                img
+            } else {
+                tracing::info!(
+                    path = %path.display(),
+                    "preview paths exhausted — running rawler full demosaic"
+                );
+                super::raw_preview::decode_full_demosaic(path)?
             }
         }
     };
@@ -110,6 +107,16 @@ fn decode_image_file(path: &Path) -> Result<DynamicImage> {
     reader
         .decode()
         .map_err(|e| Error::Decode { path: path.to_path_buf(), source: e })
+}
+
+/// Legacy fallback: pull the largest embedded JPEG from a TIFF-container
+/// RAW via EXIF SubIFDs / byte-scan, then decode. Returns `None` (not Err)
+/// for any failure so the caller can fall through to the next tier without
+/// surfacing a noisy log per-photo — these errors are expected on a subset
+/// of NEFs where the thumbnail is arithmetic-coded or a false SOI is hit.
+fn decode_jpeg_via_tiff_scan(path: &Path) -> Option<DynamicImage> {
+    let jpeg_bytes = extract_tiff_preview_jpeg(path).ok()?;
+    image::load_from_memory_with_format(&jpeg_bytes, image::ImageFormat::Jpeg).ok()
 }
 
 /// Find the largest embedded JPEG inside a TIFF-container RAW.

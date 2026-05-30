@@ -16,7 +16,7 @@
 
 use crate::error::{Error, Result};
 use image::DynamicImage;
-use rawler::decoders::{Decoder, RawDecodeParams};
+use rawler::decoders::RawDecodeParams;
 use rawler::rawsource::RawSource;
 use std::path::Path;
 
@@ -26,8 +26,7 @@ use std::path::Path;
 /// Returns the rendered `DynamicImage` at the preview's native resolution —
 /// the caller is expected to downscale to its target [`ThumbnailSpec`].
 /// Errors only when there is no embedded preview AND no thumbnail; in that
-/// case the caller can choose to fall back to a slower path (full demosaic
-/// via `rawler::Decoder::full_image`) or skip the file.
+/// case the caller can fall back to [`decode_full_demosaic`].
 pub fn extract_embedded_preview(path: &Path) -> Result<DynamicImage> {
     let source = RawSource::new(path).map_err(|e| Error::Config(format!(
         "rawler open {}: {e}",
@@ -53,4 +52,40 @@ pub fn extract_embedded_preview(path: &Path) -> Result<DynamicImage> {
         "{}: rawler found no embedded preview/thumbnail",
         path.display()
     )))
+}
+
+/// Last-resort RAW decode: ignore embedded previews entirely and demosaic the
+/// sensor data via rawler.
+///
+/// Slow (≈0.5–1 s/photo on CPU) and the output isn't color-graded the way
+/// the camera's preview JPEG would be — but it always produces a recognizable
+/// image, so it covers the gap when:
+/// - rawler has no preview support for the body (some Z-series NEFs), AND
+/// - the EXIF/byte-scan path returns bytes the JPEG decoder chokes on
+///   (e.g. arithmetic-coded `DAC` thumbnails the pure-Rust decoder can't read,
+///   or truncated false-positive matches).
+///
+/// Caller should already have tried the cheaper paths and only reach this
+/// when initial-scan correctness matters more than throughput.
+pub fn decode_full_demosaic(path: &Path) -> Result<DynamicImage> {
+    let source = RawSource::new(path).map_err(|e| Error::Config(format!(
+        "rawler open {}: {e}",
+        path.display()
+    )))?;
+    let decoder = rawler::get_decoder(&source).map_err(|e| Error::Config(format!(
+        "rawler decoder {}: {e}",
+        path.display()
+    )))?;
+    let params = RawDecodeParams::default();
+    match decoder.full_image(&source, &params) {
+        Ok(Some(img)) => Ok(img),
+        Ok(None) => Err(Error::Config(format!(
+            "{}: rawler full_image returned None",
+            path.display()
+        ))),
+        Err(e) => Err(Error::Config(format!(
+            "{}: rawler full_image: {e}",
+            path.display()
+        ))),
+    }
 }
