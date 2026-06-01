@@ -41,11 +41,17 @@ for entry in "${MODELS[@]}"; do
     continue
   fi
   echo "$name: downloading $url"
-  curl -fL --retry 3 --max-time 900 -o "$out" "$url"
-  if ! verify_sha "$sha" "$out"; then
+  # `-C -` resumes a partial download if a previous attempt was interrupted
+  # (CI runner network blip, ctrl-C). Write to `.tmp` and rename on success
+  # so an interrupted run never leaves a partial file at the final path that
+  # a later run might mistake for "already present".
+  curl -fL --retry 3 --max-time 900 -C - -o "$out.tmp" "$url"
+  if ! verify_sha "$sha" "$out.tmp"; then
     echo "$name: SHA-256 mismatch — refusing to use $out" >&2
+    rm -f "$out.tmp"
     exit 1
   fi
+  mv -f "$out.tmp" "$out"
   echo "$name: OK"
 done
 
