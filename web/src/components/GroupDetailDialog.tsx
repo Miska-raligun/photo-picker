@@ -28,6 +28,7 @@ import {
 } from "@/components/ui/select";
 import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
 import { api } from "@/lib/api";
+import { SCENE_WEIGHTS } from "@/lib/constants";
 import { useI18n, useM } from "@/lib/i18n";
 // Button import retained for header/footer use elsewhere in the dialog.
 import type {
@@ -447,14 +448,6 @@ export function GroupDetailDialog({
     </Dialog>
   );
 }
-
-/// Per-scene weights — must mirror `FinalWeights::for_scene` in the Rust
-/// scoring crate. Used to identify the dominant contributor.
-const SCENE_WEIGHTS: Record<string, { tech: number; aesthetic: number; composition: number; face_bonus: number }> = {
-  portrait: { tech: 0.30, aesthetic: 0.20, composition: 0.15, face_bonus: 0.35 },
-  landscape: { tech: 0.35, aesthetic: 0.40, composition: 0.25, face_bonus: 0.00 },
-  mixed:    { tech: 0.32, aesthetic: 0.30, composition: 0.20, face_bonus: 0.18 },
-};
 
 function ScoreBreakdown({ fs }: { fs: NonNullable<PhotoView["final_score"]> }) {
   const m = useM();
