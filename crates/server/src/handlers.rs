@@ -186,6 +186,8 @@ pub async fn scan(
     let runs = state.runs.clone();
     let semaphore = state.scan_semaphore.clone();
     let progress_streams = state.progress_streams.clone();
+    // Cloned for the runs-index persist after the pipeline completes.
+    let state_for_task = state.clone();
     let run_id_for_task = run_id.clone();
     let req_for_task = req;
     let source_for_task = source;
@@ -262,6 +264,9 @@ pub async fn scan(
             }
         }
         }).await;
+        // Persist the run index to disk so the list survives restarts. Best
+        // effort — errors are logged inside `persist_runs`.
+        state_for_task.persist_runs().await;
         // Keep the ProgressStream around for a short tail so late SSE
         // subscribers (UI tab focus, slow EventSource) can still replay the
         // terminal Done. Drop after a few seconds.
@@ -505,6 +510,9 @@ pub async fn get_run(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
+    // Restore picks/photos from disk if this is a run loaded from the index
+    // on startup (stub with empty composition_picks). No-op once hydrated.
+    state.ensure_rehydrated(&id).await;
     let guard = state.runs.lock().await;
     let Some(rec) = guard.get(&id) else {
         return (StatusCode::NOT_FOUND, "run not found").into_response();
@@ -600,6 +608,9 @@ async fn serve_jpeg(
         return jpeg_response(bytes);
     }
 
+    // After a restart the photos map is empty until the first detail
+    // touch — rehydrate from the on-disk report so /thumb works.
+    state.ensure_rehydrated(&run_id).await;
     let (photo_ref, output_dir) = {
         let guard = state.runs.lock().await;
         let Some(rec) = guard.get(&run_id) else {
@@ -678,6 +689,35 @@ pub async fn list_providers() -> Json<serde_json::Value> {
     Json(serde_json::json!({ "providers": providers }))
 }
 
+/// Server version + environment snapshot. Useful for bug reports — drop it
+/// into an issue and we instantly know which build, which providers, and
+/// where artifacts live.
+pub async fn info() -> Json<serde_json::Value> {
+    use photo_pick_core::models::{available_providers, ExecutionProvider};
+    let to_str = |ep: ExecutionProvider| match ep {
+        ExecutionProvider::Cpu => "cpu",
+        ExecutionProvider::Cuda => "cuda",
+        ExecutionProvider::CoreMl => "coreml",
+        ExecutionProvider::DirectMl => "directml",
+    };
+    let providers: Vec<&'static str> = available_providers().into_iter().map(to_str).collect();
+    let data_dir = dirs::data_dir()
+        .unwrap_or_else(std::env::temp_dir)
+        .join("photo-pick");
+    Json(serde_json::json!({
+        "name": "photo-pick",
+        "version": env!("CARGO_PKG_VERSION"),
+        "providers": providers,
+        "data_dir": data_dir,
+    }))
+}
+
+/// Liveness probe for reverse proxies / container orchestration. Always 200
+/// as long as the axum server is accepting connections.
+pub async fn health() -> Json<serde_json::Value> {
+    Json(serde_json::json!({ "status": "ok" }))
+}
+
 #[derive(Debug, Deserialize)]
 pub struct ExplainRequest {
     /// Index into the run's composition_picks vector.
@@ -717,6 +757,9 @@ pub async fn explain(
     Path(id): Path<String>,
     Json(req): Json<ExplainRequest>,
 ) -> impl IntoResponse {
+    // Persisted runs come back with empty picks/photos until first detail
+    // touch — restore them from the on-disk report before the VLM call.
+    state.ensure_rehydrated(&id).await;
     // Snapshot what we need without holding the lock across the blocking call.
     // The cache key incorporates the resolved provider name + optional model,
     // so flipping providers (openai → anthropic) or models doesn't return the
@@ -871,6 +914,9 @@ pub async fn apply(
     Path(run_id): Path<String>,
     Json(req): Json<ApplyRequest>,
 ) -> impl IntoResponse {
+    // Photos map is empty on persisted (post-restart) runs until first
+    // detail access — restore from the on-disk report so the apply works.
+    state.ensure_rehydrated(&run_id).await;
     // Resolve photo ids to paths under the lock, then release before doing I/O.
     let resolved: Vec<(String, PathBuf)> = {
         let guard = state.runs.lock().await;
@@ -991,6 +1037,7 @@ pub async fn export(
     Path(run_id): Path<String>,
     Json(req): Json<ExportRequest>,
 ) -> impl IntoResponse {
+    state.ensure_rehydrated(&run_id).await;
     // Resolve photo ids to source paths under the lock, then release for I/O.
     let resolved: Vec<(String, PathBuf)> = {
         let guard = state.runs.lock().await;

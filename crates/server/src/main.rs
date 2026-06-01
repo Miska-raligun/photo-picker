@@ -19,9 +19,24 @@ async fn main() -> Result<()> {
         .parse()?;
 
     let state = AppState::new();
+    // Restore the list of past runs from disk so users see their history
+    // after a restart. Detail (composition_picks/photos) is lazy-loaded on
+    // first access via the report.json on disk.
+    state.load_from_disk().await;
     let app = router(state);
 
-    let listener = tokio::net::TcpListener::bind(addr).await?;
+    let listener = match tokio::net::TcpListener::bind(addr).await {
+        Ok(l) => l,
+        Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+            eprintln!("photo-pick: port {} on {} is already in use.", addr.port(), addr.ip());
+            eprintln!("  → set PHOTO_PICK_BIND=127.0.0.1:<port> (e.g. 7778) and retry,");
+            eprintln!("    or stop the process holding the port (`lsof -i :{}` on macOS/Linux).", addr.port());
+            std::process::exit(2);
+        }
+        Err(e) => {
+            return Err(anyhow::anyhow!("bind {addr}: {e}"));
+        }
+    };
     println!("photo-pick server listening on http://{addr}");
     axum::serve(listener, app).await?;
     Ok(())

@@ -27,6 +27,11 @@ jobs:
           - os: ubuntu-latest
             artifact: linux-x86_64
             bin: photo-pick-server
+          # `macos-latest` resolves to Apple Silicon; pin the previous-gen Intel
+          # runner explicitly so users on x86_64 Macs still get a build.
+          - os: macos-13
+            artifact: macos-x86_64
+            bin: photo-pick-server
           - os: macos-latest
             artifact: macos-arm64
             bin: photo-pick-server

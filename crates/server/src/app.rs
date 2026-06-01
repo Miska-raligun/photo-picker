@@ -13,6 +13,8 @@ pub fn router(state: AppState) -> Router {
         .route("/assets/*rest", get(assets::asset))
         .route("/api/browse", get(handlers::browse))
         .route("/api/scan", post(handlers::scan))
+        .route("/api/info", get(handlers::info))
+        .route("/api/health", get(handlers::health))
         .route("/api/runs", get(handlers::list_runs))
         .route("/api/providers", get(handlers::list_providers))
         .route("/api/runs/:id", get(handlers::get_run))
