@@ -1,13 +1,14 @@
-use photo_pick_core::ingest::{PhotoId, PhotoRef};
+use photo_pick_core::group::CompositionGroup;
+use photo_pick_core::ingest::{ImageFormat, PhotoId, PhotoRef, RawKind};
 use photo_pick_core::pipeline::{PipelineReport, ProgressSink, Stage};
-use photo_pick_core::scoring::CompositionPick;
-use serde::Serialize;
+use photo_pick_core::scoring::{CompositionPick, FinalScore};
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex as SyncMutex};
 use tokio::sync::{broadcast, Mutex, Semaphore};
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum RunStatus {
     Running,
@@ -264,6 +265,9 @@ pub struct AppState {
     pub scan_semaphore: Arc<Semaphore>,
     /// Shared rendered-JPEG cache for /thumb and /preview.
     pub thumb_cache: Arc<ThumbCache>,
+    /// Where the on-disk run index lives (`runs.json`). `None` if no platform
+    /// data dir is available (rare — usually a misconfigured CI env).
+    pub runs_index_path: Option<Arc<PathBuf>>,
 }
 
 impl AppState {
@@ -282,6 +286,8 @@ impl AppState {
             .and_then(|s| s.parse::<usize>().ok())
             .filter(|n| *n > 0)
             .unwrap_or(50);
+        let runs_index_path = dirs::data_dir()
+            .map(|d| Arc::new(d.join("photo-pick").join("runs.json")));
         Self {
             runs: Arc::new(Mutex::new(HashMap::new())),
             progress_streams: Arc::new(Mutex::new(HashMap::new())),
@@ -289,9 +295,269 @@ impl AppState {
             max_runs,
             scan_semaphore: Arc::new(Semaphore::new(scan_concurrency)),
             thumb_cache: Arc::new(ThumbCache::new(thumb_cache_mb * 1024 * 1024)),
+            runs_index_path,
         }
     }
 
+    /// Read the on-disk run index (if any) and seed `runs` with stubs for
+    /// every completed/failed run so the UI shows past work after a server
+    /// restart. Stubs carry no `composition_picks`/`photos`/`report` — those
+    /// are lazily restored on detail access via [`ensure_rehydrated`].
+    pub async fn load_from_disk(&self) {
+        let Some(path) = self.runs_index_path.as_deref() else { return };
+        let bytes = match tokio::fs::read(path).await {
+            Ok(b) => b,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+            Err(e) => {
+                tracing::warn!("runs index unreadable at {}: {e}", path.display());
+                return;
+            }
+        };
+        let parsed: PersistedRunsFile = match serde_json::from_slice(&bytes) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!("runs index parse failed ({e}); ignoring");
+                return;
+            }
+        };
+        let mut runs = self.runs.lock().await;
+        let mut order = self.run_order.lock().await;
+        for entry in parsed.runs {
+            let rec = RunRecord {
+                id: entry.id.clone(),
+                root: entry.root,
+                output: entry.output,
+                in_place: entry.in_place,
+                status: entry.status,
+                report: entry.report,
+                html_report: entry.html_report,
+                composition_picks: vec![],
+                photos: HashMap::new(),
+                explanations: HashMap::new(),
+            };
+            runs.insert(entry.id.clone(), rec);
+            order.push_back(entry.id);
+        }
+        tracing::info!("restored {} runs from {}", runs.len(), path.display());
+    }
+
+    /// Atomically rewrite the runs index from current in-memory state. Skips
+    /// `Running` records (they can't survive a restart). Fire-and-forget —
+    /// errors are logged but never bubble up to the request that triggered
+    /// the persist.
+    pub async fn persist_runs(&self) {
+        let Some(path) = self.runs_index_path.clone() else { return };
+        let runs = self.runs.lock().await;
+        let order = self.run_order.lock().await;
+        let mut entries: Vec<PersistedRun> = Vec::with_capacity(runs.len());
+        for id in order.iter() {
+            let Some(rec) = runs.get(id) else { continue };
+            if matches!(rec.status, RunStatus::Running) {
+                continue;
+            }
+            entries.push(PersistedRun {
+                id: rec.id.clone(),
+                root: rec.root.clone(),
+                output: rec.output.clone(),
+                in_place: rec.in_place,
+                status: rec.status.clone(),
+                report: rec.report.clone(),
+                html_report: rec.html_report.clone(),
+            });
+        }
+        drop(order);
+        drop(runs);
+        let file = PersistedRunsFile { version: 1, runs: entries };
+        if let Err(e) = write_runs_index(&path, &file).await {
+            tracing::warn!("persist runs index to {}: {e}", path.display());
+        }
+    }
+
+    /// Ensure the in-memory `RunRecord` has its `composition_picks`/`photos`
+    /// populated, lazily reading `report.json` from disk if needed. Safe to
+    /// call repeatedly — no-ops once rehydrated. Only meaningful for
+    /// Completed runs.
+    pub async fn ensure_rehydrated(&self, run_id: &str) {
+        let output = {
+            let runs = self.runs.lock().await;
+            let Some(rec) = runs.get(run_id) else { return };
+            if !rec.composition_picks.is_empty() {
+                return;
+            }
+            if !matches!(rec.status, RunStatus::Completed) {
+                return;
+            }
+            rec.output.clone()
+        };
+        let report_path = output.join("report.json");
+        let bytes = match tokio::fs::read(&report_path).await {
+            Ok(b) => b,
+            Err(e) => {
+                tracing::warn!("rehydrate {run_id}: report.json read failed: {e}");
+                return;
+            }
+        };
+        let parsed: PersistedReport = match serde_json::from_slice(&bytes) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!("rehydrate {run_id}: report.json parse failed: {e}");
+                return;
+            }
+        };
+        let (picks, photos) = match parsed.into_runtime() {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!("rehydrate {run_id}: convert failed: {e}");
+                return;
+            }
+        };
+        let mut runs = self.runs.lock().await;
+        if let Some(rec) = runs.get_mut(run_id) {
+            if rec.composition_picks.is_empty() {
+                rec.composition_picks = picks;
+                rec.photos = photos;
+            }
+        }
+    }
+}
+
+/// On-disk run index: small metadata only. The heavy `composition_picks`
+/// and `photos` map live in each run's own `report.json` and are lazily
+/// re-read on demand.
+#[derive(Serialize, Deserialize)]
+struct PersistedRunsFile {
+    version: u32,
+    runs: Vec<PersistedRun>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct PersistedRun {
+    id: String,
+    root: PathBuf,
+    output: PathBuf,
+    in_place: bool,
+    status: RunStatus,
+    report: Option<PipelineReport>,
+    html_report: Option<PathBuf>,
+}
+
+async fn write_runs_index(path: &Path, file: &PersistedRunsFile) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    let bytes = serde_json::to_vec_pretty(file)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    let tmp = path.with_extension("json.tmp");
+    tokio::fs::write(&tmp, &bytes).await?;
+    tokio::fs::rename(&tmp, path).await?;
+    Ok(())
+}
+
+/// Owned mirror of [`photo_pick_core::output::report::JsonReport`] for
+/// deserialization — the core type borrows `&Path` and so can't be parsed
+/// back. We only pluck the fields needed to rebuild composition_picks +
+/// a minimal photo map (path + format from filename).
+#[derive(Deserialize)]
+struct PersistedReport {
+    composition_groups: Vec<PersistedCompositionGroup>,
+}
+
+#[derive(Deserialize)]
+struct PersistedCompositionGroup {
+    id: String,
+    member_ids: Vec<String>,
+    picks: Vec<PersistedPick>,
+}
+
+#[derive(Deserialize)]
+struct PersistedPick {
+    id: String,
+    path: PathBuf,
+    verdict: PersistedVerdict,
+    final_score: FinalScore,
+}
+
+#[derive(Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+enum PersistedVerdict { Kept, Rejected, Unscored }
+
+impl PersistedReport {
+    /// Rebuild runtime types from the on-disk report. The `photos` map is
+    /// the minimal subset needed by the apply/export/thumb paths — `path`
+    /// is correct; sha256/exif/burst metadata is reset because they're not
+    /// in the JSON (thumbs degrade to decode-from-source, which is fine).
+    fn into_runtime(self) -> anyhow::Result<(Vec<CompositionPick>, HashMap<PhotoId, PhotoRef>)> {
+        use std::str::FromStr;
+        use uuid::Uuid;
+        let mut picks = Vec::with_capacity(self.composition_groups.len());
+        let mut photos: HashMap<PhotoId, PhotoRef> = HashMap::new();
+        for g in self.composition_groups {
+            let group_uuid = Uuid::from_str(&g.id)
+                .map_err(|e| anyhow::anyhow!("group id {} not a uuid: {e}", g.id))?;
+            let mut photo_ids = Vec::with_capacity(g.member_ids.len());
+            for m in &g.member_ids {
+                let pid = PhotoId(Uuid::from_str(m)
+                    .map_err(|e| anyhow::anyhow!("member id {m} not a uuid: {e}"))?);
+                photo_ids.push(pid);
+            }
+            let mut kept = Vec::new();
+            let mut rejected = Vec::new();
+            for p in g.picks {
+                let pid = PhotoId(Uuid::from_str(&p.id)
+                    .map_err(|e| anyhow::anyhow!("pick id {} not a uuid: {e}", p.id))?);
+                let format = guess_format_from_path(&p.path);
+                photos.entry(pid).or_insert(PhotoRef {
+                    id: pid,
+                    path: p.path.clone(),
+                    format,
+                    captured_at: None,
+                    file_size: 0,
+                    sha256_short: [0u8; 16],
+                    burst_id: None,
+                    drive_mode: None,
+                    iso: None,
+                    exposure_bias_ev: None,
+                });
+                match p.verdict {
+                    PersistedVerdict::Kept => kept.push((pid, p.final_score)),
+                    PersistedVerdict::Rejected => rejected.push((pid, p.final_score)),
+                    PersistedVerdict::Unscored => {}
+                }
+            }
+            picks.push(CompositionPick {
+                group: CompositionGroup {
+                    id: photo_pick_core::group::GroupId(group_uuid),
+                    photo_ids,
+                },
+                kept,
+                rejected,
+            });
+        }
+        Ok((picks, photos))
+    }
+}
+
+fn guess_format_from_path(path: &Path) -> ImageFormat {
+    let ext = path
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_ascii_lowercase());
+    match ext.as_deref() {
+        Some("nef") => ImageFormat::Raw(RawKind::Nef),
+        Some("cr2") => ImageFormat::Raw(RawKind::Cr2),
+        Some("cr3") => ImageFormat::Raw(RawKind::Cr3),
+        Some("arw") => ImageFormat::Raw(RawKind::Arw),
+        Some("dng") => ImageFormat::Raw(RawKind::Dng),
+        Some("pef") => ImageFormat::Raw(RawKind::Pef),
+        Some("orf") => ImageFormat::Raw(RawKind::Orf),
+        Some("raf") => ImageFormat::Raw(RawKind::Raf),
+        // Anything else (jpeg/jpg/png/heic/...) — the thumb decoder picks
+        // by content sniffing anyway, so Jpeg is a fine default.
+        _ => ImageFormat::Jpeg,
+    }
+}
+
+impl AppState {
     /// Register a new run + enforce the LRU cap. Evicts non-running records
     /// from the oldest end until we're at or below `max_runs`. Also drops the
     /// run's `progress_streams` entry — otherwise the channel + replay buffer

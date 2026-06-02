@@ -15,20 +15,9 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { SCENE_WEIGHTS } from "@/lib/constants";
 import { useM } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
-
-/// Per-scene weights — mirrors `FinalWeights::for_scene` in the Rust core
-/// so the details panel can grey out terms that don't contribute (e.g.
-/// `face_bonus` for landscape) and highlight the dominant contributor.
-const SCENE_WEIGHTS: Record<
-  string,
-  { tech: number; aesthetic: number; composition: number; face_bonus: number }
-> = {
-  portrait: { tech: 0.3, aesthetic: 0.2, composition: 0.15, face_bonus: 0.35 },
-  landscape: { tech: 0.35, aesthetic: 0.4, composition: 0.25, face_bonus: 0 },
-  mixed: { tech: 0.32, aesthetic: 0.3, composition: 0.2, face_bonus: 0.18 },
-};
 
 export interface LightboxFinalScore {
   scene: string;
@@ -173,7 +162,9 @@ export function Lightbox({
         }
       } else if (e.key === " " || e.key === "Spacebar") {
         // Space: flip the current photo's keep/drop verdict (in-place mode).
-        if (inPlace && onToggleVerdict) {
+        // Gate on `details` so the shortcut tracks the on-screen button —
+        // otherwise we silently toggle a verdict the user can't see.
+        if (inPlace && details && onToggleVerdict) {
           e.preventDefault();
           onToggleVerdict();
         }

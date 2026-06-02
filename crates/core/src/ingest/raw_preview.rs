@@ -20,6 +20,21 @@ use rawler::decoders::RawDecodeParams;
 use rawler::rawsource::RawSource;
 use std::path::Path;
 
+// Statically assert `RawSource` is `Send + Sync` — we hand it across rayon
+// workers in the pipeline. If a future rawler bump weakens that, this
+// breaks the build instead of surprising us at runtime under contention.
+const _: fn() = || {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<RawSource>();
+};
+
+// Process-wide gate on full-sensor demosaic. A 24MP demosaic allocates on
+// the order of 280MB of RGB; under rayon we could hold N in flight at once
+// and OOM small machines. This caps it to one at a time. Tiers 1+2 of the
+// decoder fallback catch the vast majority of files so the throughput cost
+// is small in practice.
+static DEMOSAIC_GATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Extract the largest embedded preview (or, failing that, the smaller
 /// embedded thumbnail) from a RAW file.
 ///
@@ -68,6 +83,10 @@ pub fn extract_embedded_preview(path: &Path) -> Result<DynamicImage> {
 /// Caller should already have tried the cheaper paths and only reach this
 /// when initial-scan correctness matters more than throughput.
 pub fn decode_full_demosaic(path: &Path) -> Result<DynamicImage> {
+    // Serialize globally — see DEMOSAIC_GATE docs for why. Poisoning is
+    // tolerated: an earlier panicking demosaic shouldn't break subsequent
+    // ones (the rawler call below has its own error path).
+    let _gate = DEMOSAIC_GATE.lock().unwrap_or_else(|p| p.into_inner());
     let source = RawSource::new(path).map_err(|e| Error::Config(format!(
         "rawler open {}: {e}",
         path.display()

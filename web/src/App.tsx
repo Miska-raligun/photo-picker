@@ -32,6 +32,7 @@ export default function App() {
     loadVlmSettings()
   );
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [version, setVersion] = useState<string | null>(null);
 
   const [runs, setRuns] = useState<RunRecord[]>([]);
   const [progress, setProgress] = useState<Map<string, RunProgress>>(new Map());
@@ -127,6 +128,17 @@ export default function App() {
     };
   }, []);
 
+  // Fetch server version once. Best-effort — old servers without /api/info
+  // won't surface anything.
+  useEffect(() => {
+    api
+      .info()
+      .then((i) => setVersion(i.version))
+      .catch(() => {
+        /* silently ignore — UI just won't show the version */
+      });
+  }, []);
+
   useEffect(() => {
     (async () => {
       try {
@@ -194,6 +206,14 @@ export default function App() {
       <div className="app-shell min-h-screen relative">
         {/* Toggles float in the corner so the hero stays clean. */}
         <div className="absolute top-4 right-4 z-10 flex items-center gap-1">
+          {version && (
+            <span
+              className="text-[0.65rem] font-mono text-muted-foreground/70 px-1.5 select-none tabular-nums"
+              title={`photo-pick v${version}`}
+            >
+              v{version}
+            </span>
+          )}
           <ThemeToggle />
           <Button
             variant="ghost"

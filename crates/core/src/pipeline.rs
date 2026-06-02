@@ -98,7 +98,7 @@ pub struct PipelineConfig {
     pub thumb_cache_dir: Option<PathBuf>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PipelineReport {
     pub photo_count: usize,
     pub cached_count: usize,

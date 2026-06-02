@@ -41,6 +41,17 @@ export const api = {
     return request("/api/runs");
   },
 
+  /// Server build info (version + providers + managed data dir). Loaded once
+  /// on startup so the UI can show "vX.Y.Z" and ops can grab it for issues.
+  async info(): Promise<{
+    name: string;
+    version: string;
+    providers: ExecutionProvider[];
+    data_dir: string;
+  }> {
+    return request("/api/info");
+  },
+
   /// Which ONNX execution providers this server build actually has. The UI
   /// uses the result to hide GPU options that would silently fall back to
   /// CPU. CPU is always present.
