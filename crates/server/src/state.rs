@@ -557,6 +557,7 @@ fn guess_format_from_path(path: &Path) -> ImageFormat {
     }
 }
 
+impl AppState {
     /// Register a new run + enforce the LRU cap. Evicts non-running records
     /// from the oldest end until we're at or below `max_runs`. Also drops the
     /// run's `progress_streams` entry — otherwise the channel + replay buffer
