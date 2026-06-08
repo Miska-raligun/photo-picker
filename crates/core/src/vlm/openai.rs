@@ -126,8 +126,10 @@ impl VlmProvider for OpenAiProvider {
             .header("content-type", "application/json")
             .send_json(&body)
             .map_err(|e| {
-                tracing::warn!(elapsed_ms = start.elapsed().as_millis() as u64, %e, "vlm openai request failed");
-                Error::Config(format!("openai request: {e}"))
+                let err_str = e.to_string();
+                let safe = super::redact_secrets(&err_str);
+                tracing::warn!(elapsed_ms = start.elapsed().as_millis() as u64, error = %safe, "vlm openai request failed");
+                Error::Config(format!("openai request: {safe}"))
             })?;
         let status = resp.status();
         tracing::info!(
@@ -138,11 +140,16 @@ impl VlmProvider for OpenAiProvider {
         if !status.is_success() {
             let body = resp.body_mut().read_to_string().unwrap_or_default();
             let snippet: String = body.trim().chars().take(500).collect();
-            tracing::warn!(status = status.as_u16(), body = %snippet, "vlm openai error response");
+            // Provider 401/403 responses sometimes echo the Authorization
+            // header or a "your key sk-... is invalid" message back at us.
+            // Scrub before either the log or the bubbled-up error so the
+            // key can't leak via either path.
+            let safe = super::redact_secrets(&snippet);
+            tracing::warn!(status = status.as_u16(), body = %safe, "vlm openai error response");
             return Err(Error::Config(format!(
                 "openai HTTP {}: {}",
                 status.as_u16(),
-                if snippet.is_empty() { "(empty body)" } else { &snippet }
+                if safe.is_empty() { "(empty body)" } else { &safe }
             )));
         }
 

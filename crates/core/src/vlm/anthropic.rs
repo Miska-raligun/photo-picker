@@ -114,8 +114,10 @@ impl VlmProvider for AnthropicProvider {
             .header("content-type", "application/json")
             .send_json(&body)
             .map_err(|e| {
-                tracing::warn!(elapsed_ms = start.elapsed().as_millis() as u64, %e, "vlm anthropic request failed");
-                Error::Config(format!("anthropic request: {e}"))
+                let err_str = e.to_string();
+                let safe = super::redact_secrets(&err_str);
+                tracing::warn!(elapsed_ms = start.elapsed().as_millis() as u64, error = %safe, "vlm anthropic request failed");
+                Error::Config(format!("anthropic request: {safe}"))
             })?;
         let status = resp.status();
         tracing::info!(
@@ -126,11 +128,13 @@ impl VlmProvider for AnthropicProvider {
         if !status.is_success() {
             let body = resp.body_mut().read_to_string().unwrap_or_default();
             let snippet: String = body.trim().chars().take(500).collect();
-            tracing::warn!(status = status.as_u16(), body = %snippet, "vlm anthropic error response");
+            // See openai.rs counterpart — error bodies can echo the key.
+            let safe = super::redact_secrets(&snippet);
+            tracing::warn!(status = status.as_u16(), body = %safe, "vlm anthropic error response");
             return Err(Error::Config(format!(
                 "anthropic HTTP {}: {}",
                 status.as_u16(),
-                if snippet.is_empty() { "(empty body)" } else { &snippet }
+                if safe.is_empty() { "(empty body)" } else { &safe }
             )));
         }
 

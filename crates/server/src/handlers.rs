@@ -112,6 +112,51 @@ fn parse_provider(s: &str) -> ExecutionProvider {
 /// Managed location for a run's internal artifacts (report.html/json, feature
 /// cache, disk thumbnails) when the client doesn't specify `output`. Keyed by
 /// a stable hash of the canonicalized source path so re-scanning the same
+/// Filesystem roots `/api/browse` and `/api/scan` are allowed to touch.
+///
+/// `PHOTO_PICK_BROWSE_ROOTS` (path-list, `:` on Unix, `;` on Windows) is the
+/// explicit override — when set we use exactly those paths (canonicalized,
+/// non-existent entries dropped). When unset we default to: the user's home
+/// dir + the conventional mount points for external media (`/mnt` on WSL,
+/// `/media` on Linux, `/Volumes` on macOS, and all letter drive roots on
+/// Windows). This means the default UI flow works out of the box; opting
+/// into LAN-shared mode (`PHOTO_PICK_BIND=0.0.0.0:7777`) without also
+/// setting `PHOTO_PICK_BROWSE_ROOTS` still keeps random off-host clients
+/// from enumerating `/etc` / `C:\Windows`.
+fn allowed_roots() -> Vec<PathBuf> {
+    if let Some(s) = std::env::var_os("PHOTO_PICK_BROWSE_ROOTS") {
+        return std::env::split_paths(&s)
+            .filter_map(|p| std::fs::canonicalize(p).ok())
+            .collect();
+    }
+    let mut roots: Vec<PathBuf> = Vec::new();
+    if let Some(home) = dirs::home_dir() {
+        if let Ok(c) = std::fs::canonicalize(&home) {
+            roots.push(c);
+        }
+    }
+    for p in ["/mnt", "/media", "/Volumes"] {
+        if let Ok(c) = std::fs::canonicalize(p) {
+            roots.push(c);
+        }
+    }
+    #[cfg(windows)]
+    for d in b'A'..=b'Z' {
+        let p = PathBuf::from(format!("{}:\\", d as char));
+        if let Ok(c) = std::fs::canonicalize(&p) {
+            roots.push(c);
+        }
+    }
+    roots
+}
+
+/// True iff `path` (canonicalized) lives under one of `roots`. Empty roots
+/// means "deny everything" — that's the documented behaviour when the user
+/// explicitly sets `PHOTO_PICK_BROWSE_ROOTS=""` to lock down the server.
+fn path_under(path: &std::path::Path, roots: &[PathBuf]) -> bool {
+    roots.iter().any(|r| path.starts_with(r))
+}
+
 /// folder reuses its feature/thumbnail caches — and the user's photo folders
 /// stay free of `.cache.db`/`report.html`.
 fn artifacts_dir(source: &std::path::Path) -> PathBuf {
@@ -144,6 +189,33 @@ pub async fn scan(
         }
     };
     let display_root = source.root_hint();
+
+    // Same whitelist as /browse — scan must not be a back door around it.
+    // Canonicalize each candidate so symlinks can't escape an allowed root.
+    let roots = allowed_roots();
+    let check = |p: &std::path::Path| -> Result<(), (StatusCode, String)> {
+        let canon = std::fs::canonicalize(p).map_err(|e| {
+            (StatusCode::BAD_REQUEST, format!("{}: {e}", p.display()))
+        })?;
+        if !path_under(&canon, &roots) {
+            return Err((
+                StatusCode::FORBIDDEN,
+                format!(
+                    "{} is outside the configured browse roots; set PHOTO_PICK_BROWSE_ROOTS to widen",
+                    canon.display()
+                ),
+            ));
+        }
+        Ok(())
+    };
+    match &source {
+        PhotoSource::Directory(d) => check(d)?,
+        PhotoSource::Files(files) => {
+            for f in files {
+                check(f)?;
+            }
+        }
+    }
 
     let run_id = Uuid::new_v4().to_string();
 
@@ -417,6 +489,19 @@ pub async fn browse(
         Ok(p) => strip_verbatim_prefix(p),
         Err(e) => return Err((StatusCode::BAD_REQUEST, format!("{}: {e}", target.display()))),
     };
+
+    // Enforce the configured root whitelist before any read_dir. The
+    // canonicalize above ensures `..` and symlinks can't be used to escape.
+    let roots = allowed_roots();
+    if !path_under(&canonical, &roots) {
+        return Err((
+            StatusCode::FORBIDDEN,
+            format!(
+                "{} is outside the configured browse roots; set PHOTO_PICK_BROWSE_ROOTS to widen",
+                canonical.display()
+            ),
+        ));
+    }
 
     let read = match std::fs::read_dir(&canonical) {
         Ok(r) => r,
@@ -888,6 +973,14 @@ pub struct ApplyRequest {
     /// are permanently deleted via `fs::remove_file`.
     #[serde(default = "default_use_trash")]
     pub use_trash: bool,
+    /// Preview the apply: resolve + safety-check every path, but skip the
+    /// actual delete. The response's `would_delete` lists what a real run
+    /// would touch, and `failed` lists every entry rejected upfront
+    /// (missing file, symlink escape, etc). The UI uses this to render a
+    /// truthful "you're about to delete N files" dialog rather than a guess
+    /// derived from in-memory state.
+    #[serde(default)]
+    pub dry_run: bool,
 }
 
 fn default_use_trash() -> bool { true }
@@ -898,6 +991,18 @@ pub struct ApplyResult {
     pub deleted: usize,
     pub failed: Vec<ApplyFailure>,
     pub used_trash: bool,
+    /// True when this response is the result of a `dry_run` apply. `deleted`
+    /// is always zero in that case; the would-have-been-deleted paths live
+    /// in `would_delete`.
+    pub dry_run: bool,
+    /// Populated only on dry runs — the paths an actual apply would touch.
+    pub would_delete: Vec<ApplyTarget>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct ApplyTarget {
+    pub photo_id: String,
+    pub path: PathBuf,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -917,8 +1022,10 @@ pub async fn apply(
     // Photos map is empty on persisted (post-restart) runs until first
     // detail access — restore from the on-disk report so the apply works.
     state.ensure_rehydrated(&run_id).await;
-    // Resolve photo ids to paths under the lock, then release before doing I/O.
-    let resolved: Vec<(String, PathBuf)> = {
+    // Resolve photo ids to paths under the lock, then release before doing
+    // I/O. We snapshot the run's `root` too so the off-lock safety check
+    // can verify each path canonicalizes to something under that root.
+    let (resolved, run_root): (Vec<(String, PathBuf)>, PathBuf) = {
         let guard = state.runs.lock().await;
         let Some(rec) = guard.get(&run_id) else {
             return (StatusCode::NOT_FOUND, "run not found").into_response();
@@ -940,14 +1047,54 @@ pub async fn apply(
                 }
             }
         }
-        out
+        (out, rec.root.clone())
     };
 
     let use_trash = req.use_trash;
+    let dry_run = req.dry_run;
     let result = tokio::task::spawn_blocking(move || -> ApplyResult {
+        // Canonicalize once for the safety check; the actual delete still
+        // targets the original path so e.g. a symlink to a same-root file
+        // is unlinked at the symlink (not the target).
+        let canonical_root = std::fs::canonicalize(&run_root).unwrap_or(run_root);
         let mut deleted = 0;
         let mut failed: Vec<ApplyFailure> = Vec::new();
+        let mut would_delete: Vec<ApplyTarget> = Vec::new();
         for (id, path) in &resolved {
+            // Safety check: refuse anything that escapes the run's source
+            // root (e.g. attacker-planted symlink to /etc/shadow). Failures
+            // here record-and-skip rather than abort so the rest of the
+            // batch still proceeds.
+            let canon = match std::fs::canonicalize(path) {
+                Ok(c) => c,
+                Err(e) => {
+                    failed.push(ApplyFailure {
+                        photo_id: id.clone(),
+                        path: path.clone(),
+                        error: format!("canonicalize: {e}"),
+                    });
+                    continue;
+                }
+            };
+            if !canon.starts_with(&canonical_root) {
+                failed.push(ApplyFailure {
+                    photo_id: id.clone(),
+                    path: path.clone(),
+                    error: format!(
+                        "refusing: resolves to {} which is outside run root {}",
+                        canon.display(),
+                        canonical_root.display()
+                    ),
+                });
+                continue;
+            }
+            if dry_run {
+                would_delete.push(ApplyTarget {
+                    photo_id: id.clone(),
+                    path: path.clone(),
+                });
+                continue;
+            }
             let outcome = if use_trash {
                 trash::delete(path).map_err(|e| e.to_string())
             } else {
@@ -967,6 +1114,8 @@ pub async fn apply(
             deleted,
             failed,
             used_trash: use_trash,
+            dry_run,
+            would_delete,
         }
     })
     .await;
@@ -1039,7 +1188,7 @@ pub async fn export(
 ) -> impl IntoResponse {
     state.ensure_rehydrated(&run_id).await;
     // Resolve photo ids to source paths under the lock, then release for I/O.
-    let resolved: Vec<(String, PathBuf)> = {
+    let (resolved, run_root): (Vec<(String, PathBuf)>, PathBuf) = {
         let guard = state.runs.lock().await;
         let Some(rec) = guard.get(&run_id) else {
             return (StatusCode::NOT_FOUND, "run not found").into_response();
@@ -1061,7 +1210,7 @@ pub async fn export(
                 }
             }
         }
-        out
+        (out, rec.root.clone())
     };
 
     let mode = parse_link_mode(req.link_mode.as_deref().unwrap_or("copy"));
@@ -1075,9 +1224,37 @@ pub async fn export(
                 used.insert(entry.path());
             }
         }
+        let canonical_root = std::fs::canonicalize(&run_root).unwrap_or(run_root);
         let mut exported = 0usize;
         let mut failed: Vec<ApplyFailure> = Vec::new();
         for (id, src) in &resolved {
+            // Same safety check as apply: refuse symlinks that resolve
+            // outside the run's source root. Without this an attacker who
+            // controls the source dir could exfiltrate `/etc/shadow` into
+            // the user's chosen target via a planted symlink.
+            let canon = match std::fs::canonicalize(src) {
+                Ok(c) => c,
+                Err(e) => {
+                    failed.push(ApplyFailure {
+                        photo_id: id.clone(),
+                        path: src.clone(),
+                        error: format!("canonicalize: {e}"),
+                    });
+                    continue;
+                }
+            };
+            if !canon.starts_with(&canonical_root) {
+                failed.push(ApplyFailure {
+                    photo_id: id.clone(),
+                    path: src.clone(),
+                    error: format!(
+                        "refusing: resolves to {} which is outside run root {}",
+                        canon.display(),
+                        canonical_root.display()
+                    ),
+                });
+                continue;
+            }
             let name = src
                 .file_name()
                 .unwrap_or_else(|| std::ffi::OsStr::new("photo"));

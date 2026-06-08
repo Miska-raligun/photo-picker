@@ -268,6 +268,12 @@ pub struct AppState {
     /// Where the on-disk run index lives (`runs.json`). `None` if no platform
     /// data dir is available (rare — usually a misconfigured CI env).
     pub runs_index_path: Option<Arc<PathBuf>>,
+    /// Per-run mutex guarding `ensure_rehydrated`. Without this a fresh
+    /// detail page firing N parallel `/thumb` requests on a stub run all
+    /// race to read + parse the same (potentially multi-MB) `report.json`.
+    /// The inner Mutex is held only for the rehydrate work; outer Mutex is
+    /// just for the lookup/insert into the per-id map.
+    pub rehydrate_locks: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
 }
 
 impl AppState {
@@ -296,6 +302,7 @@ impl AppState {
             scan_semaphore: Arc::new(Semaphore::new(scan_concurrency)),
             thumb_cache: Arc::new(ThumbCache::new(thumb_cache_mb * 1024 * 1024)),
             runs_index_path,
+            rehydrate_locks: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -377,14 +384,39 @@ impl AppState {
     /// populated, lazily reading `report.json` from disk if needed. Safe to
     /// call repeatedly — no-ops once rehydrated. Only meaningful for
     /// Completed runs.
+    ///
+    /// Serialized per-run: N concurrent callers on the same stub run wait on
+    /// a single shared mutex so they don't all parse the same multi-MB JSON
+    /// in parallel. After the first one wins, the rest see populated picks
+    /// inside the lock and bail.
     pub async fn ensure_rehydrated(&self, run_id: &str) {
-        let output = {
+        // First quick check — already rehydrated or nothing to do — without
+        // taking the per-run lock (avoids overhead on the hot path where
+        // the run has been touched before).
+        {
             let runs = self.runs.lock().await;
             let Some(rec) = runs.get(run_id) else { return };
             if !rec.composition_picks.is_empty() {
                 return;
             }
             if !matches!(rec.status, RunStatus::Completed) {
+                return;
+            }
+        }
+        let lock = {
+            let mut locks = self.rehydrate_locks.lock().await;
+            locks
+                .entry(run_id.to_string())
+                .or_insert_with(|| Arc::new(Mutex::new(())))
+                .clone()
+        };
+        let _guard = lock.lock().await;
+        // Double-check inside the per-run lock: a peer may have just
+        // finished rehydrating while we waited.
+        let output = {
+            let runs = self.runs.lock().await;
+            let Some(rec) = runs.get(run_id) else { return };
+            if !rec.composition_picks.is_empty() {
                 return;
             }
             rec.output.clone()
