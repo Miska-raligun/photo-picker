@@ -143,6 +143,13 @@ export const api = {
   htmlReportUrl(runId: string): string {
     return `/api/runs/${runId}/html`;
   },
+
+  /// URL to download the canonical on-disk `report.json` for this run.
+  /// Server replies with `Content-Disposition: attachment` so a plain
+  /// `<a href>` click downloads instead of navigating.
+  reportJsonUrl(runId: string): string {
+    return `/api/runs/${runId}/report.json`;
+  },
 };
 
 export { ApiError };

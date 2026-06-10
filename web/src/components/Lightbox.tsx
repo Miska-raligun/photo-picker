@@ -57,6 +57,15 @@ interface Props {
   /// first/last photo, or when there is no group context).
   onPrev?: () => void;
   onNext?: () => void;
+  /// Jump-to-first / jump-to-last within the current group (Home / End
+  /// keys). Independent of `onPrev`/`onNext` so callers can wire group
+  /// nav without offering edge jumps, or vice versa.
+  onFirst?: () => void;
+  onLast?: () => void;
+  /// Jump to the previous / next group (PageUp / PageDown). Undefined when
+  /// the lightbox is showing a single group with no cross-group context.
+  onPrevGroup?: () => void;
+  onNextGroup?: () => void;
   /// "3 / 8" position indicator. Optional — omitted ⇒ no counter.
   position?: { index: number; total: number };
   /// Per-photo details for the right-hand info panel. Pass null when not
@@ -105,6 +114,10 @@ export function Lightbox({
   filename,
   onPrev,
   onNext,
+  onFirst,
+  onLast,
+  onPrevGroup,
+  onNextGroup,
   position,
   details,
   inPlace,
@@ -176,20 +189,49 @@ export function Lightbox({
         else if (e.key === "ArrowUp") setPos((p) => ({ ...p, y: p.y + step }));
         else if (e.key === "ArrowDown") setPos((p) => ({ ...p, y: p.y - step }));
       } else {
-        // Not zoomed → ← / → navigate within the group.
+        // Not zoomed → ← / → navigate within the group; Home/End jump to
+        // the first/last photo in the group; PgUp/PgDn jump to the
+        // previous/next group when cross-group context exists. Each
+        // shortcut is silently a no-op when the corresponding callback
+        // isn't wired so the lightbox stays usable in narrower contexts
+        // (e.g. opened with a single photo, no group).
         if (e.key === "ArrowLeft" && onPrev) {
           e.preventDefault();
           onPrev();
         } else if (e.key === "ArrowRight" && onNext) {
           e.preventDefault();
           onNext();
+        } else if (e.key === "Home" && onFirst) {
+          e.preventDefault();
+          onFirst();
+        } else if (e.key === "End" && onLast) {
+          e.preventDefault();
+          onLast();
+        } else if (e.key === "PageUp" && onPrevGroup) {
+          e.preventDefault();
+          onPrevGroup();
+        } else if (e.key === "PageDown" && onNextGroup) {
+          e.preventDefault();
+          onNextGroup();
         }
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, scale, onPrev, onNext, details, inPlace, onToggleVerdict]);
+  }, [
+    open,
+    scale,
+    onPrev,
+    onNext,
+    onFirst,
+    onLast,
+    onPrevGroup,
+    onNextGroup,
+    details,
+    inPlace,
+    onToggleVerdict,
+  ]);
 
   /// Zoom by `factor` around `anchor` in container coords. When anchor is
   /// null, zooms around the container center (i.e. keeps the image centered).

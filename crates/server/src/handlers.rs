@@ -1313,6 +1313,47 @@ pub async fn get_run_html(
     }
 }
 
+/// Stream the on-disk `report.json` (the full structured artifact the
+/// pipeline writes alongside `report.html`). Lets the UI offer a "download
+/// JSON" button without re-deriving the file from the in-memory record —
+/// the on-disk version is the canonical source.
+pub async fn get_run_report_json(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let path = {
+        let guard = state.runs.lock().await;
+        guard.get(&id).map(|r| r.output.join("report.json"))
+    };
+    let Some(p) = path else {
+        return (StatusCode::NOT_FOUND, "run not found").into_response();
+    };
+    match tokio::fs::read(&p).await {
+        Ok(bytes) => {
+            let filename = format!("photo-pick-{id}.report.json");
+            (
+                [
+                    (axum::http::header::CONTENT_TYPE, "application/json".to_string()),
+                    (
+                        axum::http::header::CONTENT_DISPOSITION,
+                        format!("attachment; filename=\"{filename}\""),
+                    ),
+                ],
+                bytes,
+            )
+                .into_response()
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            (StatusCode::NOT_FOUND, "report.json not present on disk").into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("read failed: {e}"),
+        )
+            .into_response(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::unique_dest;
