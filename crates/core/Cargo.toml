@@ -14,7 +14,7 @@ default  = ["onnx"]
 # ONNX-backed models (CLIP embeddings + YuNet faces). Disable to build/test the
 # pure-Rust pipeline (ingest, scoring, grouping, cache) without linking the
 # onnxruntime static library.
-onnx     = ["dep:ort", "dep:ndarray"]
+onnx     = ["dep:ort"]
 # Like `onnx`, but lets ort fetch a prebuilt onnxruntime static lib for the
 # build target instead of using the vendored one at ORT_LIB_LOCATION. Used by
 # CI to build all platforms (the vendored lib + fetch script are Linux-only).
@@ -47,7 +47,11 @@ serde_json        = { workspace = true }
 thiserror         = { workspace = true }
 tracing           = { workspace = true }
 ort               = { workspace = true, optional = true }
-ndarray           = { workspace = true, optional = true }
+# Promoted to a hard dep so Stage B can batch its pairwise-cosine into a
+# single SIMD-friendly matmul (see group/stage_b.rs). The crate itself is
+# small (~few hundred KB compiled), and ndarray's f32 .dot() uses the
+# auto-vectorized `matrixmultiply` kernel without requiring BLAS.
+ndarray           = { workspace = true }
 ureq              = { workspace = true }
 dirs              = { workspace = true }
 hex               = { workspace = true }

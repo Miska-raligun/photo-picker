@@ -725,6 +725,15 @@ async fn serve_jpeg(
         }
     }
 
+    // Cap concurrent decodes (see AppState.image_decode_semaphore). Queue
+    // here keeps fast-scrolling grids from saturating tokio's blocking pool
+    // and starving the run-completion writes that also live there.
+    let _permit = state
+        .image_decode_semaphore
+        .clone()
+        .acquire_owned()
+        .await
+        .expect("image decode semaphore closed");
     let result = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, String> {
         let img = decode_thumbnail_for(&photo_ref, ThumbnailSpec { long_edge })
             .map_err(|e| e.to_string())?;

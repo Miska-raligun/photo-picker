@@ -263,6 +263,13 @@ pub struct AppState {
     /// oversubscribe the blocking pool and starve thumbnail / detail
     /// requests. Configurable via PHOTO_PICK_SCAN_CONCURRENCY (default 2).
     pub scan_semaphore: Arc<Semaphore>,
+    /// Bounds concurrent image decode work for `/thumb` + `/preview`. Without
+    /// this, fast-scrolling a 1000-item grid can spawn ~1000 simultaneous
+    /// `spawn_blocking` decodes — tokio's default blocking pool is 512, so
+    /// the run-completion writes (also `spawn_blocking`) get starved. The
+    /// permit is held across the decode; cache hits skip it. Configurable
+    /// via `PHOTO_PICK_IMAGE_DECODE_CONCURRENCY` (default `num_cpus`).
+    pub image_decode_semaphore: Arc<Semaphore>,
     /// Shared rendered-JPEG cache for /thumb and /preview.
     pub thumb_cache: Arc<ThumbCache>,
     /// Where the on-disk run index lives (`runs.json`). `None` if no platform
@@ -292,6 +299,15 @@ impl AppState {
             .and_then(|s| s.parse::<usize>().ok())
             .filter(|n| *n > 0)
             .unwrap_or(50);
+        let image_decode_concurrency = std::env::var("PHOTO_PICK_IMAGE_DECODE_CONCURRENCY")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .filter(|n| *n > 0)
+            .unwrap_or_else(|| {
+                std::thread::available_parallelism()
+                    .map(|n| n.get())
+                    .unwrap_or(8)
+            });
         let runs_index_path = dirs::data_dir()
             .map(|d| Arc::new(d.join("photo-pick").join("runs.json")));
         Self {
@@ -300,6 +316,7 @@ impl AppState {
             run_order: Arc::new(Mutex::new(VecDeque::new())),
             max_runs,
             scan_semaphore: Arc::new(Semaphore::new(scan_concurrency)),
+            image_decode_semaphore: Arc::new(Semaphore::new(image_decode_concurrency)),
             thumb_cache: Arc::new(ThumbCache::new(thumb_cache_mb * 1024 * 1024)),
             runs_index_path,
             rehydrate_locks: Arc::new(Mutex::new(HashMap::new())),

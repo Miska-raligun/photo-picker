@@ -52,14 +52,22 @@ impl<T> SessionPool<T> {
     }
 }
 
-/// Read the pool size from `PHOTO_PICK_INFERENCE_POOL_SIZE`. Defaults to 2,
-/// which doubles ONNX RAM but typically halves wall-clock for CPU bound
-/// extraction. Set to `1` to restore the pre-pool behaviour (single shared
-/// session).
+/// Read the pool size from `PHOTO_PICK_INFERENCE_POOL_SIZE`. Defaults scale
+/// with the CPU: `available_parallelism() / 4`, clamped to `[2, 4]`. The
+/// rationale: each ONNX session of CLIP-vit-b32 holds ~150MB of weights, so
+/// blindly going to N_CPUS would balloon RAM on a 16-core machine; capping
+/// at 4 keeps the worst case at ~600MB while still saturating typical
+/// 8-16-core consumer hardware. Set to `1` to restore the pre-pool
+/// behaviour (single shared session).
 pub fn default_size() -> usize {
     std::env::var("PHOTO_PICK_INFERENCE_POOL_SIZE")
         .ok()
         .and_then(|s| s.parse::<usize>().ok())
         .filter(|n| *n > 0)
-        .unwrap_or(2)
+        .unwrap_or_else(|| {
+            let cpus = std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(4);
+            (cpus / 4).clamp(2, 4)
+        })
 }
