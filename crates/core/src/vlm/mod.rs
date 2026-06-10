@@ -15,9 +15,11 @@
 
 pub mod anthropic;
 pub mod openai;
+pub mod redact;
 
 pub use anthropic::AnthropicProvider;
 pub use openai::OpenAiProvider;
+pub use redact::redact_secrets;
 
 use crate::error::Result;
 

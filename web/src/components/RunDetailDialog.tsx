@@ -4,7 +4,9 @@ import type { LucideIcon } from "lucide-react";
 import {
   CheckCircle2,
   Clock,
+  ClipboardCopy,
   Database,
+  Download,
   ExternalLink,
   FolderClosed,
   Images,
@@ -14,6 +16,7 @@ import {
   Upload,
   XCircle,
 } from "lucide-react";
+import { toast } from "sonner";
 import {
   Dialog,
   DialogContent,
@@ -173,16 +176,50 @@ export function RunDetailDialog({
           )}
 
           <div className="flex items-center justify-between gap-2 pt-2 border-t">
-            <Button asChild variant="link" size="sm">
-              <a
-                href={api.htmlReportUrl(run.id)}
-                target="_blank"
-                rel="noreferrer"
-              >
-                {m.runCard.openHtmlReport}
-                <ExternalLink className="h-3 w-3" />
-              </a>
-            </Button>
+            <div className="flex items-center gap-1 flex-wrap">
+              <Button asChild variant="link" size="sm">
+                <a
+                  href={api.htmlReportUrl(run.id)}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  {m.runCard.openHtmlReport}
+                  <ExternalLink className="h-3 w-3" />
+                </a>
+              </Button>
+              {/* Direct download of the canonical on-disk report.json.
+                  Useful when sharing a run with someone for debugging or
+                  feeding the picks into a downstream tool. */}
+              <Button asChild variant="link" size="sm">
+                <a
+                  href={api.reportJsonUrl(run.id)}
+                  download={`photo-pick-${run.id}.report.json`}
+                >
+                  <Download className="h-3 w-3" />
+                  {m.runDetail.downloadJson}
+                </a>
+              </Button>
+              {/* Copy the path of the on-disk HTML report — handy when
+                  the user wants to open it in a different browser /
+                  share the artifact location with a teammate. */}
+              {run.html_report && (
+                <Button
+                  variant="link"
+                  size="sm"
+                  onClick={async () => {
+                    try {
+                      await navigator.clipboard.writeText(run.html_report!);
+                      toast.success(m.runDetail.copiedHtmlPath);
+                    } catch {
+                      toast.error(m.runDetail.copyFailed);
+                    }
+                  }}
+                >
+                  <ClipboardCopy className="h-3 w-3" />
+                  {m.runDetail.copyHtmlPath}
+                </Button>
+              )}
+            </div>
             {isCompleted && picks.length > 0 && (
               <Button variant="outline" size="sm" onClick={() => setExportOpen(true)}>
                 <Upload className="h-4 w-4" />

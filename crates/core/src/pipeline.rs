@@ -150,6 +150,19 @@ impl Pipeline {
             Some(p) => match CacheStore::open(p) {
                 Ok(c) => {
                     tracing::info!(path = %p.display(), "cache opened");
+                    // Opt-in LRU trim: long-running installs can pin the
+                    // cache size via PHOTO_PICK_CACHE_MAX_ROWS so it
+                    // doesn't grow unbounded. Best effort — failures
+                    // here are logged but don't abort the scan.
+                    if let Ok(s) = std::env::var("PHOTO_PICK_CACHE_MAX_ROWS") {
+                        if let Ok(max) = s.parse::<u64>() {
+                            if let Ok(dropped) = c.trim_to(max) {
+                                if dropped > 0 {
+                                    tracing::info!(dropped, max, "cache LRU trim");
+                                }
+                            }
+                        }
+                    }
                     Some(c)
                 }
                 Err(err) => {

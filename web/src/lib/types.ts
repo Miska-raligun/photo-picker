@@ -139,6 +139,13 @@ export interface ApplyResult {
   deleted: number;
   failed: ApplyFailure[];
   used_trash: boolean;
+  dry_run: boolean;
+  would_delete: ApplyTarget[];
+}
+
+export interface ApplyTarget {
+  photo_id: string;
+  path: string;
 }
 
 export interface ApplyFailure {

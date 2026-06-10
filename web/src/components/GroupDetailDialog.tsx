@@ -424,6 +424,16 @@ export function GroupDetailDialog({
                 ? () => setLightboxIndex((i) => (i != null ? i + 1 : i))
                 : undefined
             }
+            onFirst={
+              open && (lightboxIndex as number) > 0
+                ? () => setLightboxIndex(0)
+                : undefined
+            }
+            onLast={
+              open && (lightboxIndex as number) < displayList.length - 1
+                ? () => setLightboxIndex(displayList.length - 1)
+                : undefined
+            }
             details={
               open && photo && photo.final_score && cur
                 ? {

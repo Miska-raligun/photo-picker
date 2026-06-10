@@ -14,6 +14,7 @@ import { Toaster } from "./components/ui/sonner";
 import { api } from "./lib/api";
 import type { ProgressEvent, RunProgress, RunRecord, VlmSettings } from "./lib/types";
 import { I18nContext, LANG_STORAGE_KEY, messages, type Lang } from "./lib/i18n";
+import { clearOverrides, loadOverrides, saveOverrides } from "./lib/overridesStore";
 import { loadVlmSettings } from "./lib/vlmStore";
 
 export default function App() {
@@ -33,6 +34,12 @@ export default function App() {
   );
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [version, setVersion] = useState<string | null>(null);
+  // SSE health. We light up the banner the first time a stream errors
+  // without a prior `done` event (i.e. probably a network blip rather
+  // than a normal completion close), then dim it once a refresh succeeds.
+  // No per-run state — the banner is global because the user only cares
+  // whether *something* is currently flaky.
+  const [sseHealth, setSseHealth] = useState<"ok" | "reconnecting">("ok");
 
   const [runs, setRuns] = useState<RunRecord[]>([]);
   const [progress, setProgress] = useState<Map<string, RunProgress>>(new Map());
@@ -44,7 +51,7 @@ export default function App() {
   // when the run finishes. Replaces the previous 600ms polling loop.
   const sseRef = useRef<Map<string, EventSource>>(new Map());
 
-  const refreshRun = useCallback(async (runId: string) => {
+  const refreshRun = useCallback(async (runId: string): Promise<RunRecord | null> => {
     try {
       const r = await api.getRun(runId);
       setRuns((prev) => {
@@ -54,8 +61,10 @@ export default function App() {
         out[i] = r;
         return out;
       });
+      return r;
     } catch (e) {
       console.error("refresh run", runId, e);
+      return null;
     }
   }, []);
 
@@ -66,6 +75,12 @@ export default function App() {
       // that serves the app. Cookies/CORS not in play because same-origin.
       const es = new EventSource(`/api/runs/${runId}/events`);
       sseRef.current.set(runId, es);
+
+      // Whether we've seen the terminal `done` event on this stream. Used
+      // to distinguish "server closed normally" from "actual network
+      // failure" in the error handler below, since EventSource exposes
+      // both as the same `error` event.
+      let sawDone = false;
 
       const cleanup = () => {
         es.close();
@@ -106,15 +121,43 @@ export default function App() {
           // Don't clear — keep the bar full until the next stage starts.
         } else if (ev.kind === "done") {
           // Terminal: refresh the full record, then close.
+          sawDone = true;
           refreshRun(runId).finally(cleanup);
         }
       });
 
       es.addEventListener("error", () => {
-        // Server closed the channel (run already finished) or transient
-        // network blip — fall back to a single refresh so the UI doesn't
-        // get stuck in `running` forever.
-        refreshRun(runId).finally(cleanup);
+        if (sawDone) {
+          // Normal close after a `done` event — no UX signal needed.
+          refreshRun(runId).finally(cleanup);
+          return;
+        }
+        // Pre-`done` error means the stream dropped while the run was
+        // still in flight. Surface a reconnecting banner so the user
+        // doesn't think we're hung, then poll the run record until it
+        // reports a terminal state — that's a cheap reconnect-equivalent
+        // that doesn't require resubscribing to SSE just to keep the UI
+        // honest. Backoff caps at 30s.
+        setSseHealth("reconnecting");
+        cleanup();
+        let delay = 3_000;
+        const poll = () => {
+          refreshRun(runId)
+            .then((rec) => {
+              if (!rec) return;
+              if (rec.status.state === "running") {
+                delay = Math.min(delay * 2, 30_000);
+                setTimeout(poll, delay);
+              } else {
+                setSseHealth("ok");
+              }
+            })
+            .catch(() => {
+              delay = Math.min(delay * 2, 30_000);
+              setTimeout(poll, delay);
+            });
+        };
+        setTimeout(poll, delay);
       });
     },
     [refreshRun]
@@ -172,16 +215,36 @@ export default function App() {
   }
 
   function getOverrides(runId: string): Set<string> {
-    return overrides.get(runId) ?? new Set();
+    // Lazy hydrate: in-memory copy wins (user actively toggling here),
+    // otherwise read from localStorage so the UI shows the saved set the
+    // moment the user opens a previously-visited run.
+    const inMem = overrides.get(runId);
+    if (inMem) return inMem;
+    const persisted = loadOverrides(runId);
+    if (persisted.size > 0) {
+      // Cache locally so the next render finds it without re-reading.
+      setOverrides((prev) => {
+        if (prev.has(runId)) return prev;
+        const next = new Map(prev);
+        next.set(runId, persisted);
+        return next;
+      });
+    }
+    return persisted;
   }
 
   function toggleOverride(runId: string, photoId: string) {
     setOverrides((prev) => {
       const next = new Map(prev);
-      const set = new Set(next.get(runId) ?? []);
+      // Lazily hydrate the run's overrides from localStorage on first
+      // touch — App state Map only carries what the user has actively
+      // looked at this session, so a flip on a freshly-loaded persisted
+      // run shouldn't clobber the saved set.
+      const set = new Set(next.get(runId) ?? loadOverrides(runId));
       if (set.has(photoId)) set.delete(photoId);
       else set.add(photoId);
       next.set(runId, set);
+      saveOverrides(runId, set);
       return next;
     });
   }
@@ -204,6 +267,17 @@ export default function App() {
   return (
     <I18nContext.Provider value={{ lang, setLang, m }}>
       <div className="app-shell min-h-screen relative">
+        {sseHealth === "reconnecting" && (
+          <div
+            role="status"
+            aria-live="polite"
+            className="fixed top-0 inset-x-0 z-50 flex justify-center pointer-events-none"
+          >
+            <div className="mt-2 rounded-full bg-amber-500/95 text-white text-xs font-medium px-3 py-1 shadow-md pointer-events-auto">
+              {m.common.sseReconnecting ?? "Connection lost — reconnecting…"}
+            </div>
+          </div>
+        )}
         {/* Toggles float in the corner so the hero stays clean. */}
         <div className="absolute top-4 right-4 z-10 flex items-center gap-1">
           {version && (
@@ -294,7 +368,21 @@ export default function App() {
               setGroupRun(detailRunId);
               setGroupIdx(idx);
             }}
-            onApplyDone={() => detailRunId && subscribeProgress(detailRunId)}
+            onApplyDone={() => {
+              if (!detailRunId) return;
+              // After a successful apply the user's overrides are spent
+              // (the rejected set has been trashed) — clear both the
+              // in-memory copy and the localStorage one so a follow-up
+              // visit to the same run starts clean.
+              setOverrides((prev) => {
+                if (!prev.has(detailRunId)) return prev;
+                const next = new Map(prev);
+                next.delete(detailRunId);
+                return next;
+              });
+              clearOverrides(detailRunId);
+              subscribeProgress(detailRunId);
+            }}
           />
         </ErrorBoundary>
 

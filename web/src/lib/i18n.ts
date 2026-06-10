@@ -24,12 +24,15 @@ const enMessages = {
       langLabel: "EN",
       themeDark: "Switch to dark",
       themeLight: "Switch to light",
+      sseReconnecting: "Connection lost — reconnecting…",
     },
     scanForm: {
       title: "New task",
       source: "Source",
       sourceDesc: "Folder of photos to cull, or a hand-picked subset.",
       sourcePlaceholder: "/path/to/shoot  (or /mnt/c/... in WSL)",
+      photosSelected: (n: number) =>
+        `${n} ${n === 1 ? "photo" : "photos"} selected`,
       output: "Output directory (optional)",
       outputDesc:
         "Where reports and cache go. Leave empty to use in-place mode (no picked/ folder; rejected files can be deleted from source).",
@@ -165,6 +168,12 @@ const enMessages = {
       emptyGroups: "No composition groups for this run.",
       starting: "starting…",
     },
+    runDetail: {
+      downloadJson: "Download JSON",
+      copyHtmlPath: "Copy HTML path",
+      copiedHtmlPath: "HTML report path copied",
+      copyFailed: "Couldn't copy — paste manually from the URL bar.",
+    },
     groupCard: {
       keptSuffix: "kept",
     },
@@ -293,12 +302,14 @@ export const messages: Record<Lang, Messages> = {
       langLabel: "中",
       themeDark: "切换到深色",
       themeLight: "切换到浅色",
+      sseReconnecting: "连接断开，正在重连…",
     },
     scanForm: {
       title: "新建任务",
       source: "源目录",
       sourceDesc: "要筛选的照片所在文件夹，或手动挑选其中若干张。",
       sourcePlaceholder: "/path/to/shoot（WSL 用 /mnt/c/... 格式）",
+      photosSelected: (n: number) => `已选 ${n} 张`,
       output: "输出目录（可选）",
       outputDesc: "存放报告和缓存的目录。**留空则自动启用原地模式**：不在外部生成 picked/ 文件夹，可在结果页直接删除源目录里被拒的照片。",
       outputPlaceholder: "留空即原地模式",
@@ -414,6 +425,12 @@ export const messages: Record<Lang, Messages> = {
       taskDetails: "任务结果",
       emptyGroups: "本任务没有产生构图组。",
       starting: "启动中…",
+    },
+    runDetail: {
+      downloadJson: "下载 JSON",
+      copyHtmlPath: "复制 HTML 路径",
+      copiedHtmlPath: "HTML 报告路径已复制",
+      copyFailed: "复制失败，请手动从地址栏复制。",
     },
     groupCard: {
       keptSuffix: "已选",

@@ -68,7 +68,7 @@ export function ScanForm({ onScanStarted, compact = false }: Props) {
           }}
           placeholder={
             explicitFiles
-              ? `${explicitFiles.files.length} photos selected`
+              ? m.scanForm.photosSelected(explicitFiles.files.length)
               : m.scanForm.sourcePlaceholder
           }
           className={cn(

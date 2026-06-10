@@ -73,15 +73,26 @@ export const api = {
     return request(`/api/browse${qs}`);
   },
 
+  /// Apply (delete) a set of photos. When `dryRun` is true the server resolves
+  /// + safety-checks every path but skips the actual delete and returns the
+  /// preview in the result's `would_delete` / `failed` fields. The UI uses
+  /// the preview to render a confirm-before-destruction dialog that reflects
+  /// real path state (missing files, symlinks pointing outside the run root)
+  /// instead of guessing from in-memory state.
   async apply(
     runId: string,
     deleteIds: string[],
-    useTrash: boolean
+    useTrash: boolean,
+    dryRun = false
   ): Promise<ApplyResult> {
     return request(`/api/runs/${runId}/apply`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ delete_ids: deleteIds, use_trash: useTrash }),
+      body: JSON.stringify({
+        delete_ids: deleteIds,
+        use_trash: useTrash,
+        dry_run: dryRun,
+      }),
     });
   },
 
@@ -131,6 +142,13 @@ export const api = {
 
   htmlReportUrl(runId: string): string {
     return `/api/runs/${runId}/html`;
+  },
+
+  /// URL to download the canonical on-disk `report.json` for this run.
+  /// Server replies with `Content-Disposition: attachment` so a plain
+  /// `<a href>` click downloads instead of navigating.
+  reportJsonUrl(runId: string): string {
+    return `/api/runs/${runId}/report.json`;
   },
 };
 

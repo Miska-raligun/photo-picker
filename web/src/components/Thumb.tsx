@@ -34,6 +34,7 @@ export function Thumb({
       ) : (
         <img
           loading="lazy"
+          decoding="async"
           src={src}
           alt={alt ?? ""}
           draggable={false}

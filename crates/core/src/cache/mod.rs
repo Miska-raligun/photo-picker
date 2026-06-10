@@ -65,6 +65,11 @@ impl CacheStore {
                 created_at      INTEGER NOT NULL
             );
 
+            -- Used by `trim_to(max)` to find the LRU set without sorting
+            -- the entire `features` table on every prune.
+            CREATE INDEX IF NOT EXISTS features_created_at_idx
+                ON features (created_at);
+
             CREATE TABLE IF NOT EXISTS meta (
                 key   TEXT PRIMARY KEY,
                 value TEXT NOT NULL
@@ -72,6 +77,33 @@ impl CacheStore {
         )
         .map_err(|e| Error::Config(format!("cache schema: {e}")))?;
         Ok(())
+    }
+
+    /// Drop the oldest rows so the table holds at most `max_rows` entries.
+    /// No-op when the table is already under the cap. Callers gate on the
+    /// `PHOTO_PICK_CACHE_MAX_ROWS` env var — without it the cache is
+    /// unbounded (current default behaviour preserved).
+    pub fn trim_to(&self, max_rows: u64) -> Result<u64> {
+        let count: u64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM features", [], |r| r.get(0))
+            .map_err(|e| Error::Config(format!("cache count: {e}")))?;
+        if count <= max_rows {
+            return Ok(0);
+        }
+        let to_drop = count - max_rows;
+        let deleted = self
+            .conn
+            .execute(
+                "DELETE FROM features WHERE rowid IN (
+                    SELECT rowid FROM features
+                    ORDER BY created_at ASC
+                    LIMIT ?1
+                )",
+                params![to_drop as i64],
+            )
+            .map_err(|e| Error::Config(format!("cache trim: {e}")))?;
+        Ok(deleted as u64)
     }
 
     /// Look up cached features for a content hash. The returned PhotoFeatures
