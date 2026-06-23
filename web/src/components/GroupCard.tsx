@@ -37,7 +37,16 @@ function GroupCardImpl({ runId, pick, overrides, onClick }: Props) {
           <div className="absolute inset-0 rounded-lg border border-border bg-card shadow-sm rotate-[2.5deg] translate-x-[6px] translate-y-[5px]" />
         )}
         <div className="absolute inset-0 rounded-lg border border-border overflow-hidden bg-muted shadow-md z-10">
-          {thumb && <Thumb src={thumb} />}
+          {thumb && (
+            <Thumb
+              src={thumb}
+              alt={
+                rep?.filename
+                  ? `${rep.filename} — ${pick.scene} group #${pick.index + 1}`
+                  : `${pick.scene} group #${pick.index + 1}`
+              }
+            />
+          )}
         </div>
         <span className="absolute z-20 top-2 right-2 bg-foreground/80 text-background text-[0.7rem] font-semibold font-mono px-2 py-0.5 rounded-full tabular-nums">
           {total}
@@ -60,7 +69,10 @@ function GroupCardImpl({ runId, pick, overrides, onClick }: Props) {
         <div className="text-xs font-mono text-muted-foreground">
           #{pick.index + 1} · {pick.scene}
         </div>
-        <div className="text-xs text-foreground truncate px-1">
+        <div
+          className="text-xs text-foreground truncate px-1"
+          title={rep?.filename ?? undefined}
+        >
           {rep?.filename ?? "(empty)"}
         </div>
       </div>

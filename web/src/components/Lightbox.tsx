@@ -4,6 +4,8 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
   ExternalLink,
   Info,
   Minus,
@@ -334,7 +336,10 @@ export function Lightbox({
           {/* Top bar */}
           <div className="absolute top-4 left-4 right-4 flex items-center justify-between gap-2 text-white z-10">
             <div className="flex items-center gap-2 min-w-0">
-              <div className="font-mono text-xs sm:text-sm truncate max-w-[40vw] bg-black/40 px-2 py-1 rounded">
+              <div
+                className="font-mono text-xs sm:text-sm truncate max-w-[40vw] bg-black/40 px-2 py-1 rounded"
+                title={filename ?? undefined}
+              >
                 {filename ?? ""}
               </div>
               {position && (
@@ -344,6 +349,32 @@ export function Lightbox({
               )}
             </div>
             <div className="flex items-center gap-1.5">
+              {(onPrevGroup || onNextGroup) && (
+                <div className="flex items-center bg-black/40 rounded">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-white hover:bg-white/10 px-2 disabled:opacity-40"
+                    onClick={onPrevGroup}
+                    disabled={!onPrevGroup}
+                    aria-label={m.detail.prevGroupBtn}
+                    title={m.detail.prevGroupBtn}
+                  >
+                    <ChevronsLeft className="h-4 w-4" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-white hover:bg-white/10 px-2 disabled:opacity-40"
+                    onClick={onNextGroup}
+                    disabled={!onNextGroup}
+                    aria-label={m.detail.nextGroupBtn}
+                    title={m.detail.nextGroupBtn}
+                  >
+                    <ChevronsRight className="h-4 w-4" />
+                  </Button>
+                </div>
+              )}
               <div className="flex items-center bg-black/40 rounded">
                 <Button
                   variant="ghost"

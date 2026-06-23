@@ -76,3 +76,19 @@ export function clearOverrides(runId: string): void {
     // ignore
   }
 }
+
+/// Drop only the listed photo ids from the persisted overrides for `runId`.
+/// Used after a successful apply so the ids whose files are now gone stop
+/// haunting the UI, while overrides on files the apply skipped (failed
+/// safety check, missing on disk, etc.) keep their verdict so the user can
+/// review and retry without losing context.
+export function removeOverrides(runId: string, ids: readonly string[]): void {
+  if (ids.length === 0) return;
+  const current = loadOverrides(runId);
+  if (current.size === 0) return;
+  let touched = false;
+  for (const id of ids) {
+    if (current.delete(id)) touched = true;
+  }
+  if (touched) saveOverrides(runId, current);
+}

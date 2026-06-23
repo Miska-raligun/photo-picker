@@ -150,6 +150,19 @@ export const api = {
   reportJsonUrl(runId: string): string {
     return `/api/runs/${runId}/report.json`;
   },
+
+  /// Ask the server to open `path` in the OS file manager. Best-effort: a
+  /// 403 means the path falls outside `PHOTO_PICK_BROWSE_ROOTS`, anything
+  /// else means the platform's reveal command failed (xdg-open missing in
+  /// a container, etc.). The caller decides how loud to be about errors —
+  /// for the apply-toast use case a quiet `console.warn` is enough.
+  async reveal(path: string): Promise<void> {
+    const resp = await fetch(`/api/reveal?path=${encodeURIComponent(path)}`);
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => resp.statusText);
+      throw new ApiError(resp.status, text || resp.statusText);
+    }
+  },
 };
 
 export { ApiError };

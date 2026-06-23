@@ -24,7 +24,7 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -258,7 +258,14 @@ impl Pipeline {
             }
 
             progress.on_stage(Stage::Features, extract_count as u64);
-            let counter = Mutex::new(0u64);
+            // Throttle the tick stream: each rayon worker bumps the atomic
+            // unconditionally (relaxed is fine — we're not synchronising
+            // anything on top of the counter), but only emits an SSE event
+            // every ~1% of the work or on the final image. A 5000-photo
+            // run goes from 5000 broadcasts (one per worker per image) to
+            // ~100, well under the channel's bound.
+            let counter = AtomicU64::new(0);
+            let tick_step = ((extract_count as u64) / 100).max(1);
 
             // Init the disk thumbnail cache once if requested. Persist runs
             // in the rayon loop below so we never re-decode the source for
@@ -287,9 +294,10 @@ impl Pipeline {
                     if let Some(c) = &thumb_cache {
                         c.persist(&p.sha256_short, &thumb);
                     }
-                    let mut c = counter.lock().unwrap();
-                    *c += 1;
-                    progress.on_tick(Stage::Features, *c);
+                    let done = counter.fetch_add(1, Ordering::Relaxed) + 1;
+                    if done % tick_step == 0 || done == extract_count as u64 {
+                        progress.on_tick(Stage::Features, done);
+                    }
                     Some((p.id, p.sha256_short, feat))
                 })
                 .collect();
@@ -348,9 +356,13 @@ impl Pipeline {
             (self.cfg.stage_a.clone(), self.cfg.stage_b.clone())
         };
 
-        // 3. Stage A clustering
+        // 3. Stage A clustering. Pass the sink through so the inner loop can
+        // emit a real total + throttled ticks (cluster_stage_a fires its own
+        // `on_stage` once it knows the timed-photo count); we keep the
+        // surrounding `on_stage`/`on_finish` brackets so the UI still sees a
+        // Cluster phase even when the run has no timed photos.
         progress.on_stage(Stage::Cluster, 0);
-        let groups: Vec<Group> = cluster_stage_a(&photos, &features, &stage_a_params);
+        let groups: Vec<Group> = cluster_stage_a(&photos, &features, &stage_a_params, progress);
         progress.on_finish(Stage::Cluster);
         tracing::info!(group_count = groups.len(), "stage A complete");
 

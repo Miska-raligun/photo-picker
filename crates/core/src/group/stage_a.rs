@@ -1,6 +1,7 @@
 use super::{cosine_normalized, unionfind::UnionFind, Group, GroupId};
 use crate::features::{hash::hamming, PhotoFeatures};
 use crate::ingest::{PhotoId, PhotoRef};
+use crate::pipeline::{ProgressSink, Stage};
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -38,10 +39,15 @@ impl Default for StageAParams {
 /// Cluster near-duplicate photos by time-window + perceptual hash distance.
 ///
 /// Photos without `captured_at` each become their own singleton group.
+///
+/// `progress` receives a `Stage::Cluster` `on_stage(total)` once the timed
+/// partition is known and throttled `on_tick(done)` events as the outer
+/// loop advances. `&NoopProgress` is fine when the caller doesn't care.
 pub fn cluster_stage_a(
     photos: &[PhotoRef],
     features: &HashMap<PhotoId, PhotoFeatures>,
     params: &StageAParams,
+    progress: &dyn ProgressSink,
 ) -> Vec<Group> {
     // Partition by whether we have a timestamp.
     let (mut timed, untimed): (Vec<&PhotoRef>, Vec<&PhotoRef>) = photos
@@ -53,6 +59,12 @@ pub fn cluster_stage_a(
     let mut groups: Vec<Group> = Vec::new();
 
     if !timed.is_empty() {
+        // Late `on_stage` lets the UI swap its indeterminate bar for a real
+        // total once we know how many timestamped photos there actually are.
+        let n = timed.len() as u64;
+        progress.on_stage(Stage::Cluster, n);
+        let tick_step = (n / 100).max(1);
+
         let delta_t = compute_delta_t(&timed, params);
         let mut uf = UnionFind::new(timed.len());
 
@@ -93,6 +105,10 @@ pub fn cluster_stage_a(
                 if should_merge {
                     uf.union(i, j);
                 }
+            }
+            let done = (i + 1) as u64;
+            if done % tick_step == 0 || done == n {
+                progress.on_tick(Stage::Cluster, done);
             }
         }
 
@@ -184,7 +200,12 @@ mod tests {
         let features: HashMap<PhotoId, PhotoFeatures> =
             ids.iter().map(|id| (*id, mk_feat(*id, 0xFF))).collect();
 
-        let groups = cluster_stage_a(&photos, &features, &StageAParams::default());
+        let groups = cluster_stage_a(
+            &photos,
+            &features,
+            &StageAParams::default(),
+            &crate::pipeline::NoopProgress,
+        );
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].photo_ids.len(), 5);
     }
@@ -197,7 +218,12 @@ mod tests {
         let features: HashMap<_, _> =
             [(id_a, mk_feat(id_a, 0)), (id_b, mk_feat(id_b, 0))].into();
 
-        let groups = cluster_stage_a(&photos, &features, &StageAParams::default());
+        let groups = cluster_stage_a(
+            &photos,
+            &features,
+            &StageAParams::default(),
+            &crate::pipeline::NoopProgress,
+        );
         assert_eq!(groups.len(), 2);
     }
 
@@ -219,7 +245,12 @@ mod tests {
         ]
         .into();
 
-        let groups = cluster_stage_a(&photos, &features, &StageAParams::default());
+        let groups = cluster_stage_a(
+            &photos,
+            &features,
+            &StageAParams::default(),
+            &crate::pipeline::NoopProgress,
+        );
         assert_eq!(groups.len(), 2, "0 and 2 merge across the dissimilar middle frame");
         let sizes: Vec<usize> = groups.iter().map(|g| g.photo_ids.len()).collect();
         assert!(sizes.contains(&2) && sizes.contains(&1));
@@ -236,7 +267,12 @@ mod tests {
         ]
         .into();
 
-        let groups = cluster_stage_a(&photos, &features, &StageAParams::default());
+        let groups = cluster_stage_a(
+            &photos,
+            &features,
+            &StageAParams::default(),
+            &crate::pipeline::NoopProgress,
+        );
         assert_eq!(groups.len(), 2);
     }
 }

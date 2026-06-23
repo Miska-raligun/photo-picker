@@ -14,7 +14,12 @@ import { Toaster } from "./components/ui/sonner";
 import { api } from "./lib/api";
 import type { ProgressEvent, RunProgress, RunRecord, VlmSettings } from "./lib/types";
 import { I18nContext, LANG_STORAGE_KEY, messages, type Lang } from "./lib/i18n";
-import { clearOverrides, loadOverrides, saveOverrides } from "./lib/overridesStore";
+import {
+  loadOverrides,
+  removeOverrides,
+  saveOverrides,
+} from "./lib/overridesStore";
+import { fireScanCompleteNotification } from "./lib/notifyStore";
 import { loadVlmSettings } from "./lib/vlmStore";
 
 export default function App() {
@@ -67,6 +72,16 @@ export default function App() {
       return null;
     }
   }, []);
+
+  // Snapshot the language messages so the SSE handler closure can read
+  // them without re-subscribing every render. Re-subscribing on language
+  // change is undesirable (the EventSource would be torn down + replayed
+  // for every active scan) and notification text doesn't need real-time
+  // language tracking — it's read once, at the moment the run finishes.
+  const messagesRef = useRef(m);
+  useEffect(() => {
+    messagesRef.current = m;
+  }, [m]);
 
   const subscribeProgress = useCallback(
     (runId: string) => {
@@ -122,7 +137,20 @@ export default function App() {
         } else if (ev.kind === "done") {
           // Terminal: refresh the full record, then close.
           sawDone = true;
-          refreshRun(runId).finally(cleanup);
+          refreshRun(runId).then((rec) => {
+            // Fire an OS notification when the user has opted in. Skipped on
+            // failure (`ev.ok === false`) and when the page is visible —
+            // the existing UI already tells you the scan is done.
+            const visible =
+              typeof document !== "undefined" && document.visibilityState === "visible";
+            if (ev.ok && !visible && rec) {
+              const runCard = messagesRef.current.runCard;
+              const body = rec.report
+                ? runCard.notifyCompleteBody(rec.report.photo_count)
+                : runCard.notifyCompleteFallback;
+              fireScanCompleteNotification(body);
+            }
+          }).finally(cleanup);
         }
       });
 
@@ -315,6 +343,9 @@ export default function App() {
                 <p className="text-muted-foreground text-sm max-w-md">
                   {m.common.tagline}
                 </p>
+                <p className="text-muted-foreground/70 text-xs max-w-md">
+                  {m.common.firstRunHint}
+                </p>
               </div>
               <ScanForm onScanStarted={handleScanStarted} />
             </FadeUp>
@@ -368,19 +399,31 @@ export default function App() {
               setGroupRun(detailRunId);
               setGroupIdx(idx);
             }}
-            onApplyDone={() => {
+            onApplyDone={(result) => {
               if (!detailRunId) return;
-              // After a successful apply the user's overrides are spent
-              // (the rejected set has been trashed) — clear both the
-              // in-memory copy and the localStorage one so a follow-up
-              // visit to the same run starts clean.
-              setOverrides((prev) => {
-                if (!prev.has(detailRunId)) return prev;
-                const next = new Map(prev);
-                next.delete(detailRunId);
-                return next;
-              });
-              clearOverrides(detailRunId);
+              // After a successful apply, only the photo ids that were
+              // actually deleted lose their overrides — files that the
+              // apply skipped (failed safety check, missing on disk, etc.)
+              // keep theirs so the user can adjust and retry without
+              // re-deriving their verdict.
+              const deletedIds = result.deleted_ids;
+              if (deletedIds.length > 0) {
+                setOverrides((prev) => {
+                  const cur = prev.get(detailRunId);
+                  if (!cur || cur.size === 0) return prev;
+                  let touched = false;
+                  const nextSet = new Set(cur);
+                  for (const id of deletedIds) {
+                    if (nextSet.delete(id)) touched = true;
+                  }
+                  if (!touched) return prev;
+                  const next = new Map(prev);
+                  if (nextSet.size === 0) next.delete(detailRunId);
+                  else next.set(detailRunId, nextSet);
+                  return next;
+                });
+                removeOverrides(detailRunId, deletedIds);
+              }
               subscribeProgress(detailRunId);
             }}
           />
