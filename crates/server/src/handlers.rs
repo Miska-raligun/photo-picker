@@ -555,6 +555,76 @@ pub async fn browse(
     }))
 }
 
+#[derive(Debug, Deserialize)]
+pub struct RevealQuery {
+    /// File or directory to surface in the OS file manager. Canonicalized
+    /// + checked against `PHOTO_PICK_BROWSE_ROOTS` before spawning.
+    pub path: PathBuf,
+}
+
+/// Open the OS file manager with `path` selected (or, on Linux, the parent
+/// directory open in the default file manager). Used by the apply toast so
+/// the user can jump straight to the on-disk delete manifest. Each platform
+/// command is spawned directly without going through a shell so unusual
+/// characters in the path can't be interpreted as arguments.
+pub async fn reveal(
+    axum::extract::Query(q): axum::extract::Query<RevealQuery>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    // Same allow-list gate as /browse — a malicious caller (or an XSS in
+    // some unrelated page same-origin to this server) must not be able to
+    // pop the user's file manager onto arbitrary system paths.
+    let canonical = match std::fs::canonicalize(&q.path) {
+        Ok(p) => strip_verbatim_prefix(p),
+        Err(e) => return Err((StatusCode::BAD_REQUEST, format!("{}: {e}", q.path.display()))),
+    };
+    let roots = allowed_roots();
+    if !path_under(&canonical, &roots) {
+        return Err((
+            StatusCode::FORBIDDEN,
+            format!("{} is outside PHOTO_PICK_BROWSE_ROOTS", canonical.display()),
+        ));
+    }
+    let result = tokio::task::spawn_blocking(move || -> std::io::Result<()> {
+        #[cfg(target_os = "macos")]
+        {
+            std::process::Command::new("open")
+                .arg("-R")
+                .arg(&canonical)
+                .spawn()
+                .map(|_| ())
+        }
+        #[cfg(target_os = "windows")]
+        {
+            // `explorer /select,<path>` requires the flag and path as a single
+            // argv slot. Direct spawn means Rust quotes it once via the
+            // platform's standard escaping and explorer parses it back.
+            std::process::Command::new("explorer")
+                .arg(format!("/select,{}", canonical.display()))
+                .spawn()
+                .map(|_| ())
+        }
+        #[cfg(all(unix, not(target_os = "macos")))]
+        {
+            // xdg-open doesn't support "select this file"; opening the
+            // containing dir is the closest portable equivalent.
+            let target = canonical
+                .parent()
+                .map(std::path::Path::to_path_buf)
+                .unwrap_or_else(|| canonical.clone());
+            std::process::Command::new("xdg-open")
+                .arg(&target)
+                .spawn()
+                .map(|_| ())
+        }
+    })
+    .await;
+    match result {
+        Ok(Ok(())) => Ok(StatusCode::NO_CONTENT),
+        Ok(Err(e)) => Err((StatusCode::INTERNAL_SERVER_ERROR, format!("reveal: {e}"))),
+        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, format!("reveal task: {e}"))),
+    }
+}
+
 /// Strip Windows' verbatim/extended-length prefix (`\\?\`) and the UNC variant
 /// (`\\?\UNC\server\share` → `\\server\share`). No-op on non-Windows.
 #[cfg(windows)]
@@ -1009,6 +1079,27 @@ pub struct ApplyResult {
     pub dry_run: bool,
     /// Populated only on dry runs — the paths an actual apply would touch.
     pub would_delete: Vec<ApplyTarget>,
+    /// PhotoIds that were successfully deleted. Lets the UI clear stale
+    /// verdict overrides for files that are gone without dropping the
+    /// overrides on files that the apply skipped or failed.
+    pub deleted_ids: Vec<String>,
+    /// Path of the on-disk JSON audit trail written when at least one file
+    /// was actually deleted. `None` for dry runs and zero-delete results.
+    pub manifest_path: Option<PathBuf>,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct DeletedManifest<'a> {
+    timestamp: chrono::DateTime<chrono::Utc>,
+    run_id: &'a str,
+    mode: &'static str,
+    items: Vec<DeletedItem<'a>>,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct DeletedItem<'a> {
+    photo_id: &'a str,
+    path: &'a std::path::Path,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -1037,7 +1128,7 @@ pub async fn apply(
     // Resolve photo ids to paths under the lock, then release before doing
     // I/O. We snapshot the run's `root` too so the off-lock safety check
     // can verify each path canonicalizes to something under that root.
-    let (resolved, run_root): (Vec<(String, PathBuf)>, PathBuf) = {
+    let (resolved, run_root, run_output): (Vec<(String, PathBuf)>, PathBuf, PathBuf) = {
         let guard = state.runs.lock().await;
         let Some(rec) = guard.get(&run_id) else {
             return (StatusCode::NOT_FOUND, "run not found").into_response();
@@ -1059,17 +1150,19 @@ pub async fn apply(
                 }
             }
         }
-        (out, rec.root.clone())
+        (out, rec.root.clone(), rec.output.clone())
     };
 
     let use_trash = req.use_trash;
     let dry_run = req.dry_run;
+    let run_id_for_task = run_id.clone();
     let result = tokio::task::spawn_blocking(move || -> ApplyResult {
         // Canonicalize once for the safety check; the actual delete still
         // targets the original path so e.g. a symlink to a same-root file
         // is unlinked at the symlink (not the target).
         let canonical_root = std::fs::canonicalize(&run_root).unwrap_or(run_root);
         let mut deleted = 0;
+        let mut deleted_ids: Vec<String> = Vec::new();
         let mut failed: Vec<ApplyFailure> = Vec::new();
         let mut would_delete: Vec<ApplyTarget> = Vec::new();
         for (id, path) in &resolved {
@@ -1113,7 +1206,10 @@ pub async fn apply(
                 std::fs::remove_file(path).map_err(|e| e.to_string())
             };
             match outcome {
-                Ok(()) => deleted += 1,
+                Ok(()) => {
+                    deleted += 1;
+                    deleted_ids.push(id.clone());
+                }
                 Err(e) => failed.push(ApplyFailure {
                     photo_id: id.clone(),
                     path: path.clone(),
@@ -1121,6 +1217,57 @@ pub async fn apply(
                 }),
             }
         }
+
+        // Audit trail: when at least one file was actually removed, write a
+        // JSON record alongside the run's reports so the user has a concrete
+        // list of what disappeared. Skip on dry runs (preview) and zero
+        // deletes (nothing to record). Best-effort — manifest write failure
+        // shouldn't fail the apply response.
+        let manifest_path = if !dry_run && !deleted_ids.is_empty() {
+            // ISO8601 basic (no colons) — safe across Windows / macOS / Linux.
+            let now = chrono::Utc::now();
+            let ts = now.format("%Y%m%dT%H%M%SZ").to_string();
+            let path = run_output.join(format!("deleted-{ts}.json"));
+            // deleted_ids is a subset of resolved (skips failed) and the
+            // pair list is small (handful to hundreds), so a linear lookup
+            // per id is fine and keeps the path borrow lifetime trivial.
+            let items: Vec<DeletedItem> = deleted_ids
+                .iter()
+                .filter_map(|did| {
+                    resolved
+                        .iter()
+                        .find(|(rid, _)| rid == did)
+                        .map(|(_, rpath)| DeletedItem {
+                            photo_id: did,
+                            path: rpath.as_path(),
+                        })
+                })
+                .collect();
+            let manifest = DeletedManifest {
+                timestamp: now,
+                run_id: &run_id_for_task,
+                mode: if use_trash { "trash" } else { "delete" },
+                items,
+            };
+            match (|| -> std::io::Result<()> {
+                if let Some(parent) = path.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                let f = std::fs::File::create(&path)?;
+                serde_json::to_writer_pretty(f, &manifest)
+                    .map_err(|e| std::io::Error::other(e))?;
+                Ok(())
+            })() {
+                Ok(()) => Some(path),
+                Err(e) => {
+                    tracing::warn!(?path, %e, "failed to write delete manifest");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         ApplyResult {
             requested: resolved.len(),
             deleted,
@@ -1128,6 +1275,8 @@ pub async fn apply(
             used_trash: use_trash,
             dry_run,
             would_delete,
+            deleted_ids,
+            manifest_path,
         }
     })
     .await;

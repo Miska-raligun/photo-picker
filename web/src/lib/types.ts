@@ -141,6 +141,14 @@ export interface ApplyResult {
   used_trash: boolean;
   dry_run: boolean;
   would_delete: ApplyTarget[];
+  /// Photo ids that were actually deleted on this apply. Subset of the
+  /// request's `delete_ids` (excludes anything that hit `failed`). Used by
+  /// the UI to clear stale verdict overrides without touching the overrides
+  /// on files the apply skipped — those keep their context for a retry.
+  deleted_ids: string[];
+  /// Path of the on-disk delete manifest (audit trail) when at least one
+  /// file was actually deleted. `null` on dry runs and zero-delete results.
+  manifest_path: string | null;
 }
 
 export interface ApplyTarget {

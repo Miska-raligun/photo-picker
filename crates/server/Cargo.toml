@@ -36,3 +36,4 @@ rust-embed         = { workspace = true }
 mime_guess         = { workspace = true }
 tokio-stream       = { workspace = true }
 futures-util       = { workspace = true }
+chrono             = { workspace = true }

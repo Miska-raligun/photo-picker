@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronLeft,
   ChevronRight,
@@ -185,9 +185,10 @@ export function GroupDetailDialog({
     return map.size > 0 ? map : null;
   }, [vlmResult]);
 
-  // Combined kept-first display list — used both for rendering cards and
-  // for resolving the lightbox photo + per-card AI annotations by index.
-  const displayList = useMemo(
+  // Combined kept-first list in the SCAN's original order. This is what
+  // the VLM saw when it answered, so its "Image N" indexes line up with
+  // positions here — keep this stable across sort/filter changes.
+  const rawDisplayList = useMemo(
     () =>
       pick
         ? [
@@ -197,6 +198,175 @@ export function GroupDetailDialog({
         : [],
     [pick]
   );
+
+  // Re-key AI annotations by photo_id so sort/filter don't desync them
+  // from their cards. Built once per VLM response from the raw list's
+  // original positions (which is what the model's reply references).
+  const aiByPhotoId = useMemo<Map<string, Ann> | null>(() => {
+    if (!aiAnnotations) return null;
+    const out = new Map<string, Ann>();
+    rawDisplayList.forEach((item, i) => {
+      const ann = aiAnnotations.get(i + 1);
+      if (ann) out.set(item.p.photo_id, ann);
+    });
+    return out.size > 0 ? out : null;
+  }, [rawDisplayList, aiAnnotations]);
+
+  // Sort + filter controls for the grid. Defaults reproduce the legacy
+  // "algorithm order, show everything" behaviour, so nothing surprises
+  // users who don't touch the toolbar.
+  type SortMode = "algo" | "ai" | "score" | "time";
+  type FilterMode = "all" | "kept" | "rejected" | "overridden" | "lowiso";
+  const [sortMode, setSortMode] = useState<SortMode>("algo");
+  const [filterMode, setFilterMode] = useState<FilterMode>("all");
+
+  // Reset toolbar state when the user moves between groups so we don't
+  // carry "show only overridden" into a group that has none and end up
+  // with an empty grid.
+  useEffect(() => {
+    setSortMode("algo");
+    setFilterMode("all");
+  }, [pickIndex]);
+
+  // Multi-select for bulk verdict flips. Plain click still toggles a single
+  // verdict (legacy muscle memory); Shift selects a range and Ctrl/Cmd
+  // toggles individual cards into a working set the toolbar can act on.
+  // Cleared on every group change so cross-group selections — which would
+  // be ambiguous to apply — can't accidentally form.
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const lastClickIndexRef = useRef<number | null>(null);
+  useEffect(() => {
+    setSelectedIds(new Set());
+    lastClickIndexRef.current = null;
+  }, [pickIndex]);
+
+  // Esc clears the selection without closing the dialog. Skipped while
+  // typing (provider <select> etc.) so users don't lose a working set to
+  // an accidental Esc on a form control.
+  useEffect(() => {
+    if (!open || lightboxIndex !== null) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      const tag = (e.target as HTMLElement | null)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if (selectedIds.size > 0) {
+        e.preventDefault();
+        e.stopPropagation();
+        setSelectedIds(new Set());
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [open, lightboxIndex, selectedIds.size]);
+
+  const handleCardClick = (e: React.MouseEvent, photoId: string, index: number) => {
+    if (e.shiftKey && lastClickIndexRef.current != null) {
+      const a = Math.min(lastClickIndexRef.current, index);
+      const b = Math.max(lastClickIndexRef.current, index);
+      const rangeIds = displayList.slice(a, b + 1).map((it) => it.p.photo_id);
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        for (const id of rangeIds) next.add(id);
+        return next;
+      });
+      lastClickIndexRef.current = index;
+      return;
+    }
+    if (e.ctrlKey || e.metaKey) {
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        if (next.has(photoId)) next.delete(photoId);
+        else next.add(photoId);
+        return next;
+      });
+      lastClickIndexRef.current = index;
+      return;
+    }
+    // Plain click: legacy single-toggle, unrelated to the bulk-select set.
+    lastClickIndexRef.current = index;
+    if (inPlace) onToggleOverride(photoId);
+  };
+
+  /// Bulk verdict actions for the current selection.
+  ///   - "keep"   : ensure each selected photo ends up KEPT (clear override
+  ///                on algo-kept, set override on algo-rejected)
+  ///   - "reject" : opposite — ensure each ends up REJECTED
+  ///   - "reset"  : clear override on every selected photo (restore algo
+  ///                verdict regardless of current state)
+  /// Each action walks the selection one id at a time through the
+  /// existing single-photo toggle so it composes cleanly with
+  /// overridesStore's per-id persistence path and the apply manifest.
+  const applyBulk = (action: "keep" | "reject" | "reset") => {
+    if (selectedIds.size === 0) return;
+    // Index algo-verdict by photo id so we can compute the desired
+    // override state per photo without flipping any twice.
+    const algoKept = new Set<string>();
+    for (const item of rawDisplayList) {
+      if (item.kept) algoKept.add(item.p.photo_id);
+    }
+    for (const id of selectedIds) {
+      const isAlgoKept = algoKept.has(id);
+      const isOverridden = overrides.has(id);
+      const wantKeep = action === "keep";
+      const wantReject = action === "reject";
+      const wantReset = action === "reset";
+      // Resolved final verdict after applying the override toggle once.
+      // We toggle only when the toggle would move us toward the target.
+      if (wantReset) {
+        if (isOverridden) onToggleOverride(id);
+        continue;
+      }
+      const finalKept = isOverridden ? !isAlgoKept : isAlgoKept;
+      if (wantKeep && !finalKept) onToggleOverride(id);
+      else if (wantReject && finalKept) onToggleOverride(id);
+    }
+    setSelectedIds(new Set());
+  };
+
+  const displayList = useMemo(() => {
+    const filtered = rawDisplayList.filter((item) => {
+      switch (filterMode) {
+        case "kept":
+          return item.kept;
+        case "rejected":
+          return !item.kept;
+        case "overridden":
+          return overrides.has(item.p.photo_id);
+        case "lowiso":
+          return item.p.iso != null && item.p.iso <= 800;
+        default:
+          return true;
+      }
+    });
+    if (sortMode === "algo") return filtered;
+    const sorted = [...filtered];
+    sorted.sort((a, b) => {
+      switch (sortMode) {
+        case "ai": {
+          const ar = aiByPhotoId?.get(a.p.photo_id)?.rank ?? Number.POSITIVE_INFINITY;
+          const br = aiByPhotoId?.get(b.p.photo_id)?.rank ?? Number.POSITIVE_INFINITY;
+          return ar - br;
+        }
+        case "score": {
+          const av = a.p.final_score?.value ?? -1;
+          const bv = b.p.final_score?.value ?? -1;
+          return bv - av;
+        }
+        case "time": {
+          const at = a.p.captured_at
+            ? Date.parse(a.p.captured_at)
+            : Number.POSITIVE_INFINITY;
+          const bt = b.p.captured_at
+            ? Date.parse(b.p.captured_at)
+            : Number.POSITIVE_INFINITY;
+          return at - bt;
+        }
+        default:
+          return 0;
+      }
+    });
+    return sorted;
+  }, [rawDisplayList, filterMode, sortMode, aiByPhotoId, overrides]);
 
   const total = pick ? pick.kept.length + pick.rejected.length : 0;
   // Final "will be kept" count after user flips: algo-kept minus flipped-kept,
@@ -267,25 +437,123 @@ export function GroupDetailDialog({
             </div>
           )}
           {!loading && pick && runId && (
-            <ScrollArea className="flex-1 w-full min-h-0">
-              <div className="flex gap-4 px-6 py-4 w-max">
-                {displayList.map(({ p, kept }, i) => (
-                  <PhotoCard
-                    key={p.photo_id}
-                    runId={runId}
-                    photo={p}
-                    kept={kept}
-                    overridden={overrides.has(p.photo_id)}
-                    inPlace={inPlace}
-                    aiRank={aiAnnotations?.get(i + 1)?.rank}
-                    aiReason={aiAnnotations?.get(i + 1)?.reason}
-                    onToggleOverride={() => onToggleOverride(p.photo_id)}
-                    onViewOriginal={() => setLightboxIndex(i)}
-                  />
+            <>
+              <div className="px-6 pt-3 pb-2 flex items-center gap-2 flex-wrap text-xs text-muted-foreground border-b bg-background shrink-0">
+                <span className="font-mono uppercase tracking-wider text-[0.65rem]">
+                  {m.detail.sortBy}
+                </span>
+                <Select
+                  value={sortMode}
+                  onValueChange={(v) => setSortMode(v as SortMode)}
+                >
+                  <SelectTrigger className="h-7 w-36 text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="algo">{m.detail.sortAlgo}</SelectItem>
+                    <SelectItem value="ai" disabled={!aiByPhotoId}>
+                      {m.detail.sortAi}
+                    </SelectItem>
+                    <SelectItem value="score">{m.detail.sortScore}</SelectItem>
+                    <SelectItem value="time">{m.detail.sortTime}</SelectItem>
+                  </SelectContent>
+                </Select>
+                <span className="font-mono uppercase tracking-wider text-[0.65rem] ml-2">
+                  {m.detail.filter}
+                </span>
+                {(
+                  [
+                    ["all", m.detail.filterAll],
+                    ["kept", m.detail.filterKept],
+                    ["rejected", m.detail.filterRejected],
+                    ["overridden", m.detail.filterOverridden],
+                    ["lowiso", m.detail.filterLowIso],
+                  ] as const
+                ).map(([key, label]) => (
+                  <Button
+                    key={key}
+                    variant={filterMode === key ? "default" : "outline"}
+                    size="sm"
+                    className="h-7 text-xs px-2"
+                    onClick={() => setFilterMode(key)}
+                  >
+                    {label}
+                  </Button>
                 ))}
+                {selectedIds.size > 0 && inPlace ? (
+                  <div className="ml-auto flex items-center gap-1.5 px-2 py-1 rounded-md bg-sky-50 dark:bg-sky-950/30 border border-sky-200/60 dark:border-sky-800/60">
+                    <span className="font-mono text-sky-900 dark:text-sky-200">
+                      {m.detail.bulkSelected(selectedIds.size)}
+                    </span>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-6 text-xs px-2"
+                      onClick={() => applyBulk("keep")}
+                    >
+                      {m.detail.bulkKeep}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-6 text-xs px-2"
+                      onClick={() => applyBulk("reject")}
+                    >
+                      {m.detail.bulkReject}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-6 text-xs px-2"
+                      onClick={() => applyBulk("reset")}
+                    >
+                      {m.detail.bulkReset}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-6 text-xs px-1.5"
+                      onClick={() => setSelectedIds(new Set())}
+                      aria-label={m.detail.bulkClear}
+                      title={m.detail.bulkClear}
+                    >
+                      ×
+                    </Button>
+                  </div>
+                ) : (
+                  <span className="ml-auto font-mono tabular-nums">
+                    {displayList.length}/{rawDisplayList.length}
+                  </span>
+                )}
               </div>
-              <ScrollBar orientation="horizontal" />
-            </ScrollArea>
+              <ScrollArea className="flex-1 w-full min-h-0">
+                <div className="flex gap-4 px-6 py-4 w-max">
+                  {displayList.length === 0 ? (
+                    <div className="text-sm text-muted-foreground py-6 px-2">
+                      {m.detail.filterEmpty}
+                    </div>
+                  ) : (
+                    displayList.map(({ p, kept }, i) => (
+                      <PhotoCard
+                        key={p.photo_id}
+                        runId={runId}
+                        photo={p}
+                        kept={kept}
+                        overridden={overrides.has(p.photo_id)}
+                        selected={selectedIds.has(p.photo_id)}
+                        inPlace={inPlace}
+                        aiRank={aiByPhotoId?.get(p.photo_id)?.rank}
+                        aiReason={aiByPhotoId?.get(p.photo_id)?.reason}
+                        onCardClick={(e) => handleCardClick(e, p.photo_id, i)}
+                        onToggleOverride={() => onToggleOverride(p.photo_id)}
+                        onViewOriginal={() => setLightboxIndex(i)}
+                      />
+                    ))
+                  )}
+                </div>
+                <ScrollBar orientation="horizontal" />
+              </ScrollArea>
+            </>
           )}
           {!loading && (!pick || !runId) && (
             <div className="flex-1 flex flex-col items-center justify-center gap-3 text-muted-foreground py-12">
@@ -395,9 +663,7 @@ export function GroupDetailDialog({
           : undefined;
         const photo = cur?.p;
         const aiAnn =
-          lightboxIndex != null && aiAnnotations
-            ? aiAnnotations.get((lightboxIndex as number) + 1)
-            : undefined;
+          photo && aiByPhotoId ? aiByPhotoId.get(photo.photo_id) : undefined;
         return (
           <Lightbox
             open={open}
@@ -432,6 +698,22 @@ export function GroupDetailDialog({
             onLast={
               open && (lightboxIndex as number) < displayList.length - 1
                 ? () => setLightboxIndex(displayList.length - 1)
+                : undefined
+            }
+            onPrevGroup={
+              open && canPrev
+                ? () => {
+                    onNavigate(-1);
+                    setLightboxIndex(0);
+                  }
+                : undefined
+            }
+            onNextGroup={
+              open && canNext
+                ? () => {
+                    onNavigate(1);
+                    setLightboxIndex(0);
+                  }
                 : undefined
             }
             details={
@@ -555,11 +837,18 @@ interface PhotoCardProps {
   kept: boolean;
   /// Whether the user has flipped the verdict for this photo.
   overridden: boolean;
+  /// Whether the card is part of the current multi-select working set.
+  /// Visual-only — bulk actions live in the parent's toolbar.
+  selected: boolean;
   inPlace: boolean;
   /// The VLM's independent rank (1 = best) — shown as overlay badge when present.
   aiRank?: number;
   /// One-sentence reason from the VLM, shown below the score grid.
   aiReason?: string;
+  /// Click handler with the raw event so the parent can branch on
+  /// Shift / Ctrl / Cmd modifiers to drive multi-select without the card
+  /// having to know about it.
+  onCardClick: (e: React.MouseEvent) => void;
   onToggleOverride: () => void;
   onViewOriginal: () => void;
 }
@@ -572,9 +861,11 @@ function PhotoCardImpl({
   photo,
   kept,
   overridden,
+  selected,
   inPlace,
   aiRank,
   aiReason,
+  onCardClick,
   onToggleOverride,
   onViewOriginal,
 }: PhotoCardProps) {
@@ -604,7 +895,7 @@ function PhotoCardImpl({
     <div
       role={inPlace ? "button" : undefined}
       tabIndex={inPlace ? 0 : undefined}
-      onClick={inPlace ? onToggleOverride : undefined}
+      onClick={(e) => onCardClick(e)}
       onKeyDown={
         inPlace
           ? (e) => {
@@ -618,9 +909,12 @@ function PhotoCardImpl({
       className={cn(
         "group w-80 shrink-0 rounded-lg border bg-card overflow-hidden flex flex-col transition-all",
         // Border + opacity reflect the FINAL state, not the raw algo verdict.
-        willKeep && !overridden && "border-[var(--success)] border-2",
-        !willKeep && !overridden && "opacity-80",
-        overridden && "border-primary border-2",
+        willKeep && !overridden && !selected && "border-[var(--success)] border-2",
+        !willKeep && !overridden && !selected && "opacity-80",
+        overridden && !selected && "border-primary border-2",
+        // Selection ring wins visually over verdict styling — it's the
+        // user's most-recent intent and they need to see what's in the set.
+        selected && "border-sky-500 border-2 ring-2 ring-sky-300/60",
         inPlace &&
           "cursor-pointer hover:shadow-md hover:-translate-y-0.5 focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none"
       )}
@@ -635,7 +929,11 @@ function PhotoCardImpl({
       <div className="relative aspect-[4/3] bg-muted">
         <Thumb
           src={api.thumbUrl(runId, photo.photo_id)}
-          alt={photo.filename ?? ""}
+          alt={
+            photo.filename
+              ? `${photo.filename} — ${verdictText}`
+              : verdictText
+          }
         />
         <Badge
           className={cn(
@@ -669,7 +967,10 @@ function PhotoCardImpl({
         </button>
       </div>
       <div className="p-3 space-y-2 flex flex-col flex-1">
-        <div className="text-xs font-medium text-foreground break-all leading-tight">
+        <div
+          className="text-xs font-medium text-foreground truncate leading-tight"
+          title={photo.filename ?? photo.photo_id}
+        >
           {photo.filename ?? photo.photo_id.slice(0, 8)}
         </div>
         {fs && <ScoreBreakdown fs={fs} />}

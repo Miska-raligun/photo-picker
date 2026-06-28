@@ -30,7 +30,7 @@ import { ApplyBar } from "./ApplyBar";
 import { ExportDialog } from "./ExportDialog";
 import { api } from "@/lib/api";
 import { useM } from "@/lib/i18n";
-import type { RunRecord } from "@/lib/types";
+import type { ApplyResult, RunRecord } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 interface Props {
@@ -39,7 +39,7 @@ interface Props {
   run: RunRecord | null;
   overrides: Set<string>;
   onOpenGroup: (pickIndex: number) => void;
-  onApplyDone: () => void;
+  onApplyDone: (result: ApplyResult) => void;
 }
 
 export function RunDetailDialog({

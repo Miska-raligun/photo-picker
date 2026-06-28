@@ -1,3 +1,4 @@
+import { useEffect, useMemo, useState } from "react";
 import type { LucideIcon } from "lucide-react";
 import {
   AlertCircle,
@@ -19,6 +20,31 @@ import { useM } from "@/lib/i18n";
 import type { RunProgress, RunRecord } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
+/// Sliding-window ETA. Holds the last N tick samples (timestamp + done) so
+/// we can fit a recent throughput line through them instead of averaging
+/// over an entire stage — the first few ticks are usually slower (warmup,
+/// model load) and drag a global ETA way off.
+const ETA_WINDOW = 5;
+interface EtaSample {
+  ts: number;
+  done: number;
+  stage: string;
+}
+
+function formatEta(sec: number): string {
+  if (sec >= 3600) {
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    return `~${h}h ${m}m`;
+  }
+  if (sec >= 60) {
+    const min = Math.floor(sec / 60);
+    const s = sec % 60;
+    return `~${min}m ${s}s`;
+  }
+  return `~${Math.max(1, sec)}s`;
+}
+
 interface Props {
   run: RunRecord;
   progress?: RunProgress | null;
@@ -30,6 +56,41 @@ export function RunCard({ run, progress, onOpenDetail }: Props) {
   const state = run.status.state;
   const error = state === "failed" ? run.status.error : null;
   const report = run.report;
+
+  // Throughput samples drive the ETA estimate. Reset on stage change so a
+  // fast Score phase doesn't get extrapolated into a slow Features phase.
+  const [samples, setSamples] = useState<EtaSample[]>([]);
+  useEffect(() => {
+    if (!progress || progress.total === 0) {
+      if (samples.length !== 0) setSamples([]);
+      return;
+    }
+    setSamples((prev) => {
+      const last = prev[prev.length - 1];
+      if (last && last.stage !== progress.stage) {
+        return [{ ts: Date.now(), done: progress.done, stage: progress.stage }];
+      }
+      if (last && last.done === progress.done) return prev;
+      const next = [...prev, { ts: Date.now(), done: progress.done, stage: progress.stage }];
+      return next.length > ETA_WINDOW ? next.slice(-ETA_WINDOW) : next;
+    });
+    // samples intentionally not depended on — we only react to incoming ticks.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [progress?.done, progress?.total, progress?.stage]);
+
+  const etaSec = useMemo<number | null>(() => {
+    if (!progress || progress.total <= 0 || samples.length < 2) return null;
+    const first = samples[0];
+    const last = samples[samples.length - 1];
+    if (last.stage !== progress.stage) return null;
+    const dt = (last.ts - first.ts) / 1000;
+    const dd = last.done - first.done;
+    if (dd <= 0 || dt <= 0) return null;
+    const rate = dd / dt;
+    const remaining = progress.total - progress.done;
+    if (remaining <= 0) return null;
+    return Math.round(remaining / rate);
+  }, [samples, progress?.total, progress?.done, progress?.stage]);
 
   const statusBadge = (() => {
     if (state === "running")
@@ -80,7 +141,9 @@ export function RunCard({ run, progress, onOpenDetail }: Props) {
         </div>
         <div className="flex items-center gap-1.5 text-xs text-muted-foreground min-w-0">
           <FolderClosed className="h-3.5 w-3.5 shrink-0" />
-          <span className="font-mono truncate">{run.root}</span>
+          <span className="font-mono truncate" title={run.root}>
+            {run.root}
+          </span>
         </div>
       </CardHeader>
 
@@ -92,6 +155,11 @@ export function RunCard({ run, progress, onOpenDetail }: Props) {
               {progress && progress.total > 0 && (
                 <span className="tabular-nums">
                   {progress.done} / {progress.total}
+                  {etaSec != null && etaSec > 1 && (
+                    <span className="ml-2 text-muted-foreground/60">
+                      {formatEta(etaSec)}
+                    </span>
+                  )}
                 </span>
               )}
             </div>

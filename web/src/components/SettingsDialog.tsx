@@ -21,6 +21,11 @@ import { Separator } from "@/components/ui/separator";
 import { useM } from "@/lib/i18n";
 import type { VlmSettings } from "@/lib/types";
 import { saveVlmSettings, clearVlmSettings, VLM_PRESETS } from "@/lib/vlmStore";
+import {
+  ensureNotificationPermission,
+  loadNotifyEnabled,
+  saveNotifyEnabled,
+} from "@/lib/notifyStore";
 import { toast } from "sonner";
 
 interface Props {
@@ -47,6 +52,32 @@ export function SettingsDialog({ open, onOpenChange, initial, onChange }: Props)
   );
   const [showKey, setShowKey] = useState(false);
   const [preset, setPreset] = useState("");
+  // Persisted across dialog opens — read on mount so the checkbox shows
+  // the saved state immediately. Permission check happens only when the
+  // user actually flips it on.
+  const [notifyEnabled, setNotifyEnabled] = useState<boolean>(() =>
+    loadNotifyEnabled()
+  );
+  const notifyApiUnavailable = typeof Notification === "undefined";
+
+  async function handleNotifyToggle(next: boolean) {
+    if (!next) {
+      setNotifyEnabled(false);
+      saveNotifyEnabled(false);
+      return;
+    }
+    const perm = await ensureNotificationPermission();
+    if (perm === "granted") {
+      setNotifyEnabled(true);
+      saveNotifyEnabled(true);
+    } else {
+      // Don't silently leave the checkbox enabled — the user thinks
+      // they switched it on but no notification would ever fire.
+      setNotifyEnabled(false);
+      saveNotifyEnabled(false);
+      toast.error(m.settings.notifyPermissionDenied);
+    }
+  }
 
   function applyPreset(key: string) {
     setPreset(key);
@@ -136,6 +167,33 @@ export function SettingsDialog({ open, onOpenChange, initial, onChange }: Props)
                 </div>
               </label>
             </div>
+          </div>
+
+          <Separator />
+          <div>
+            <h3 className="font-semibold text-sm mb-1">{m.settings.notifyHeading}</h3>
+            <p className="text-xs text-muted-foreground mb-3">
+              {m.settings.notifyDesc}
+            </p>
+            <label className="flex items-start gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={notifyEnabled}
+                disabled={notifyApiUnavailable}
+                onChange={(e) => {
+                  void handleNotifyToggle(e.target.checked);
+                }}
+                className="mt-1 accent-primary"
+              />
+              <div className="text-sm">
+                <div className="font-medium">{m.settings.notifyToggle}</div>
+                {notifyApiUnavailable && (
+                  <div className="text-xs text-muted-foreground">
+                    {m.settings.notifyUnsupported}
+                  </div>
+                )}
+              </div>
+            </label>
           </div>
 
           {mode === "custom" && (

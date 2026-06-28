@@ -21,7 +21,10 @@ interface Props {
   picks: CompositionPickView[];
   overrides: Set<string>;
   sourceRoot: string;
-  onDone: () => void;
+  /// Called after a successful apply. Receives the server response so the
+  /// caller can clear overrides on the photo ids that were actually deleted
+  /// (and leave the rest alone for retry).
+  onDone: (result: ApplyResult) => void;
 }
 
 export function ApplyBar({ runId, picks, overrides, sourceRoot, onDone }: Props) {
@@ -82,19 +85,39 @@ export function ApplyBar({ runId, picks, overrides, sourceRoot, onDone }: Props)
         ? m.applyBar.toastMovedToTrash
         : m.applyBar.toastDeleted;
       const msg = `${r.deleted} / ${r.requested} ${verb}`;
+      const manifest = r.manifest_path;
+      // Audit-trail action: only useful when an on-disk manifest was
+      // actually written (skipped on dry runs / zero-delete results).
+      const action = manifest
+        ? {
+            label: m.applyBar.toastReveal,
+            onClick: () => {
+              api.reveal(manifest).catch((err) => {
+                toast.error(m.applyBar.toastRevealFailed, {
+                  description: err instanceof Error ? err.message : String(err),
+                });
+              });
+            },
+          }
+        : undefined;
+      const description = manifest ? m.applyBar.toastManifestSaved(manifest) : undefined;
       if (r.failed.length === 0) {
-        toast.success(msg);
+        toast.success(msg, { description, action });
       } else {
+        const failureSummary = r.failed
+          .slice(0, 3)
+          .map((f) => `${f.path.split("/").pop()}: ${f.error}`)
+          .join("\n");
         toast.warning(`${msg} — ${r.failed.length} ${m.applyBar.toastFailedSuffix}`, {
-          description: r.failed
-            .slice(0, 3)
-            .map((f) => `${f.path.split("/").pop()}: ${f.error}`)
-            .join("\n"),
+          description: description
+            ? `${description}\n${failureSummary}`
+            : failureSummary,
+          action,
         });
       }
       setDone(true);
       setConfirmOpen(false);
-      onDone();
+      onDone(r);
     } catch (e) {
       toast.error(m.applyBar.toastApplyFailed, {
         description: e instanceof Error ? e.message : String(e),
