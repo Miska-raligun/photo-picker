@@ -124,26 +124,29 @@ fn parse_provider(s: &str) -> ExecutionProvider {
 /// setting `PHOTO_PICK_BROWSE_ROOTS` still keeps random off-host clients
 /// from enumerating `/etc` / `C:\Windows`.
 fn allowed_roots() -> Vec<PathBuf> {
+    // Roots and the paths checked against them must canonicalize the same
+    // way: on Windows `fs::canonicalize` yields the verbatim form (`\\?\C:\`),
+    // which would never `starts_with`-match the stripped paths the handlers
+    // compare, so strip it here too.
+    let canon = |p: &std::path::Path| std::fs::canonicalize(p).ok().map(strip_verbatim_prefix);
     if let Some(s) = std::env::var_os("PHOTO_PICK_BROWSE_ROOTS") {
-        return std::env::split_paths(&s)
-            .filter_map(|p| std::fs::canonicalize(p).ok())
-            .collect();
+        return std::env::split_paths(&s).filter_map(|p| canon(&p)).collect();
     }
     let mut roots: Vec<PathBuf> = Vec::new();
     if let Some(home) = dirs::home_dir() {
-        if let Ok(c) = std::fs::canonicalize(&home) {
+        if let Some(c) = canon(&home) {
             roots.push(c);
         }
     }
     for p in ["/mnt", "/media", "/Volumes"] {
-        if let Ok(c) = std::fs::canonicalize(p) {
+        if let Some(c) = canon(std::path::Path::new(p)) {
             roots.push(c);
         }
     }
     #[cfg(windows)]
     for d in b'A'..=b'Z' {
         let p = PathBuf::from(format!("{}:\\", d as char));
-        if let Ok(c) = std::fs::canonicalize(&p) {
+        if let Some(c) = canon(&p) {
             roots.push(c);
         }
     }
@@ -194,9 +197,9 @@ pub async fn scan(
     // Canonicalize each candidate so symlinks can't escape an allowed root.
     let roots = allowed_roots();
     let check = |p: &std::path::Path| -> Result<(), (StatusCode, String)> {
-        let canon = std::fs::canonicalize(p).map_err(|e| {
-            (StatusCode::BAD_REQUEST, format!("{}: {e}", p.display()))
-        })?;
+        let canon = std::fs::canonicalize(p)
+            .map(strip_verbatim_prefix)
+            .map_err(|e| (StatusCode::BAD_REQUEST, format!("{}: {e}", p.display())))?;
         if !path_under(&canon, &roots) {
             return Err((
                 StatusCode::FORBIDDEN,
@@ -1509,6 +1512,37 @@ mod tests {
     use std::collections::HashSet;
     use std::ffi::OsStr;
     use std::path::{Path, PathBuf};
+
+    // Regression for the v0.4.1 Windows bug: allowed_roots() kept drive roots
+    // in verbatim form (`\\?\C:\`) while browse compared stripped paths, so
+    // `C:\` never matched and every browse got a 403. Both sides must
+    // canonicalize identically.
+    #[test]
+    fn allowed_roots_match_stripped_canonical_paths() {
+        let home = match dirs::home_dir().and_then(|h| std::fs::canonicalize(h).ok()) {
+            Some(h) => h,
+            None => return, // no home dir in this environment; nothing to check
+        };
+        let stripped = super::strip_verbatim_prefix(home);
+        assert!(
+            super::path_under(&stripped, &super::allowed_roots()),
+            "stripped canonical home {} must fall under the default browse roots",
+            stripped.display()
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn strip_verbatim_prefix_forms() {
+        assert_eq!(
+            super::strip_verbatim_prefix(PathBuf::from(r"\\?\C:\Users")),
+            PathBuf::from(r"C:\Users")
+        );
+        assert_eq!(
+            super::strip_verbatim_prefix(PathBuf::from(r"\\?\UNC\srv\share")),
+            PathBuf::from(r"\\srv\share")
+        );
+    }
 
     #[test]
     fn unique_dest_disambiguates_collisions() {

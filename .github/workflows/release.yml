@@ -27,11 +27,13 @@ jobs:
           - os: ubuntu-latest
             artifact: linux-x86_64
             bin: photo-pick-server
-          # `macos-latest` resolves to Apple Silicon; pin the previous-gen Intel
-          # runner explicitly so users on x86_64 Macs still get a build.
-          - os: macos-13
-            artifact: macos-x86_64
-            bin: photo-pick-server
+          # `macos-latest` resolves to Apple Silicon (arm64). Intel x86_64
+          # macOS was tried via `macos-13` but those runners are queue-starved
+          # — last v0.4.0 release the job sat for 24h before GitHub killed it
+          # with "exceeded maximum execution time while awaiting a runner".
+          # Intel Mac users on macOS 13+ can run the arm64 binary under
+          # Rosetta 2 if needed; if a native x86_64 build becomes important
+          # again, this entry can be re-added.
           - os: macos-latest
             artifact: macos-arm64
             bin: photo-pick-server
