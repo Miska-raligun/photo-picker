@@ -130,6 +130,52 @@ impl ThumbDiskCache {
         }
         Ok(bytes)
     }
+
+    /// Evict least-recently-modified thumbnails until the directory's total
+    /// size is at or under `max_bytes`. Returns the number of files removed.
+    ///
+    /// mtime is a good-enough LRU proxy here: `persist` freshly writes the
+    /// current scan's thumbs, so a trim after a scan preferentially drops
+    /// thumbnails from older scans of other sources. Evicting a thumb that's
+    /// still wanted is harmless — `read_or_render` re-renders on demand.
+    /// Best-effort like the rest of this cache: I/O errors are logged and
+    /// skipped, never surfaced.
+    pub fn trim_to_bytes(&self, max_bytes: u64) -> u64 {
+        let entries = match fs::read_dir(&self.dir) {
+            Ok(rd) => rd,
+            Err(_) => return 0, // dir doesn't exist yet — nothing to trim
+        };
+        let mut files: Vec<(PathBuf, u64, std::time::SystemTime)> = entries
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().map(|x| x == "jpg").unwrap_or(false))
+            .filter_map(|e| {
+                let meta = e.metadata().ok()?;
+                let mtime = meta.modified().ok()?;
+                Some((e.path(), meta.len(), mtime))
+            })
+            .collect();
+        let mut total: u64 = files.iter().map(|(_, len, _)| len).sum();
+        if total <= max_bytes {
+            return 0;
+        }
+        files.sort_by_key(|(_, _, mtime)| *mtime); // oldest first
+        let mut removed = 0u64;
+        for (path, len, _) in files {
+            if total <= max_bytes {
+                break;
+            }
+            match fs::remove_file(&path) {
+                Ok(()) => {
+                    total = total.saturating_sub(len);
+                    removed += 1;
+                }
+                Err(err) => {
+                    tracing::debug!(path = %path.display(), %err, "thumb cache evict failed");
+                }
+            }
+        }
+        removed
+    }
 }
 
 #[allow(dead_code)]
@@ -164,5 +210,41 @@ mod tests {
         let td = TempDir::new().unwrap();
         let cache = ThumbDiskCache::new(td.path().to_path_buf(), 480, 78);
         assert!(cache.read(&[0u8; 16]).is_none());
+    }
+
+    #[test]
+    fn trim_to_bytes_evicts_oldest_first() {
+        let td = TempDir::new().unwrap();
+        let cache = ThumbDiskCache::new(td.path().join("thumbs"), 480, 78);
+        for i in 0..4u8 {
+            cache.persist(&[i; 16], &dummy_thumb(64));
+        }
+        // Stagger mtimes explicitly — persist runs too fast to rely on clock
+        // ticks. [0] oldest … [3] newest.
+        for (i, secs) in [(0u8, 40u64), (1, 30), (2, 20), (3, 10)] {
+            let path = cache.dir().join(format!(
+                "{}.v{}.jpg",
+                hex::encode([i; 16]),
+                super::THUMB_CACHE_VERSION
+            ));
+            let t = std::time::SystemTime::now() - std::time::Duration::from_secs(secs);
+            let f = std::fs::File::options().append(true).open(&path).unwrap();
+            f.set_modified(t).unwrap();
+        }
+        let one_file = std::fs::metadata(
+            cache.dir().join(format!("{}.v{}.jpg", hex::encode([0u8; 16]), super::THUMB_CACHE_VERSION)),
+        )
+        .unwrap()
+        .len();
+        // Budget for ~2 files → the two oldest ([0], [1]) go, newest stay.
+        let removed = cache.trim_to_bytes(one_file * 2 + 1);
+        assert_eq!(removed, 2);
+        assert!(cache.read(&[0u8; 16]).is_none());
+        assert!(cache.read(&[1u8; 16]).is_none());
+        assert!(cache.read(&[2u8; 16]).is_some());
+        assert!(cache.read(&[3u8; 16]).is_some());
+
+        // Under budget → no-op.
+        assert_eq!(cache.trim_to_bytes(u64::MAX), 0);
     }
 }

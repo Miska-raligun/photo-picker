@@ -304,6 +304,25 @@ fn decode_stride(
     out: &mut Vec<RawFace>,
 ) {
     let fm = (INPUT_SIZE / stride) as usize;
+    // Guard against short tensors before the raw-offset indexing below. A
+    // slice OOB here is a panic, not an Err — and it fires inside a rayon
+    // worker where `detect`'s error→no-faces fallback can't catch it. Only
+    // reachable with a model whose outputs don't match the pinned YuNet
+    // shapes (corrupt download, swapped file), but that's exactly when we
+    // want a warn + skip instead of taking down the whole scan.
+    let cells = fm * fm;
+    if cls.len() < cells || obj.len() < cells || bbox.len() < cells * 4 || kps.len() < cells * 10 {
+        tracing::warn!(
+            stride,
+            expected = cells,
+            cls = cls.len(),
+            obj = obj.len(),
+            bbox = bbox.len(),
+            kps = kps.len(),
+            "YuNet output tensor shorter than expected; skipping stride (model file mismatch?)"
+        );
+        return;
+    }
     let s = stride as f32;
     for y in 0..fm {
         for x in 0..fm {
@@ -391,5 +410,34 @@ fn project_to_source(face: &RawFace, m: &LetterboxMeta) -> FaceBox {
         eye_open_prob: None,
         smile_prob: None,
         local_sharpness: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression: a short output tensor (corrupt/mismatched model file) must
+    /// be skipped with a warn, not panic with a slice OOB inside the rayon
+    /// worker where `detect`'s Err fallback can't catch it.
+    #[test]
+    fn decode_stride_skips_short_tensors_instead_of_panicking() {
+        let mut out = Vec::new();
+        // stride 32 → fm = 20, cells = 400. Provide far fewer.
+        decode_stride(32, &[0.9; 10], &[0.9; 10], &[0.5; 40], &[0.1; 100], &mut out);
+        assert!(out.is_empty());
+
+        // Sanity: a correctly-sized set decodes without panicking (all scores
+        // below threshold → still empty, but the loop runs to completion).
+        let cells = (INPUT_SIZE / 32) as usize * (INPUT_SIZE / 32) as usize;
+        decode_stride(
+            32,
+            &vec![0.0; cells],
+            &vec![0.0; cells],
+            &vec![0.0; cells * 4],
+            &vec![0.0; cells * 10],
+            &mut out,
+        );
+        assert!(out.is_empty());
     }
 }

@@ -2,10 +2,10 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use indicatif::{ProgressBar, ProgressStyle};
 use photo_pick_core::group::{StageAParams, StageBParams};
-use photo_pick_core::ingest::{PhotoSource, ThumbnailSpec};
-use photo_pick_core::models::ExecutionProvider;
-use photo_pick_core::pipeline::{LinkMode, NoopProgress, Pipeline, PipelineConfig, ProgressSink, Stage};
-use photo_pick_core::scoring::TechWeights;
+use photo_pick_core::ingest::PhotoSource;
+use photo_pick_core::pipeline::{
+    normalize_k2, LinkMode, NoopProgress, Pipeline, PipelineConfig, ProgressSink, Stage,
+};
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -230,40 +230,33 @@ fn run_scan(args: ScanArgs) -> Result<()> {
         Some(args.cache_db.clone().unwrap_or_else(|| args.output.join(".cache.db")))
     };
 
-    let cfg = PipelineConfig {
-        source: PhotoSource::Directory(args.root.clone()),
-        output: args.output.clone(),
-        report_path,
-        html_report_path,
-        cache_path,
-        stage_a: StageAParams {
-            k_time: args.time_k,
-            min_dt: Duration::from_secs_f32(args.min_dt),
-            max_dt: Duration::from_secs_f32(args.max_dt),
-            max_hash_dist: args.hash_dist,
-            clip_threshold: args.stage_a_clip_threshold,
-        },
-        stage_b: StageBParams {
-            similarity_threshold: args.stage_b_threshold,
-            chain_margin: StageBParams::default().chain_margin,
-        },
-        k1: args.k1,
-        k2: match args.k2 {
-            // `--k2 0` is shorthand for "auto" (matches the Option=None default).
-            Some(0) | None => None,
-            Some(k) => Some(k),
-        },
-        tech_weights: TechWeights::default(),
-        link_mode: args.link.into(),
-        thumbnail: ThumbnailSpec::default(),
-        dry_run: args.dry_run,
-        enable_clip: !args.no_clip,
-        enable_face: !args.no_face,
-        materialize_picks: true,
-        adaptive_thresholds: true,
-        thumb_cache_dir: Some(args.output.join(".thumbs")),
-        execution_provider: ExecutionProvider::Cpu,
+    // Start from the shared defaults and override only what the CLI exposes.
+    // Fields the CLI intentionally pins (materialize_picks=true — the CLI's
+    // whole point is producing a picked/ folder) come from the defaults.
+    let mut cfg = PipelineConfig::with_defaults(
+        PhotoSource::Directory(args.root.clone()),
+        args.output.clone(),
+    );
+    cfg.report_path = report_path;
+    cfg.html_report_path = html_report_path;
+    cfg.cache_path = cache_path;
+    cfg.stage_a = StageAParams {
+        k_time: args.time_k,
+        min_dt: Duration::from_secs_f32(args.min_dt),
+        max_dt: Duration::from_secs_f32(args.max_dt),
+        max_hash_dist: args.hash_dist,
+        clip_threshold: args.stage_a_clip_threshold,
     };
+    cfg.stage_b = StageBParams {
+        similarity_threshold: args.stage_b_threshold,
+        chain_margin: StageBParams::default().chain_margin,
+    };
+    cfg.k1 = args.k1;
+    cfg.k2 = normalize_k2(args.k2);
+    cfg.link_mode = args.link.into();
+    cfg.dry_run = args.dry_run;
+    cfg.enable_clip = !args.no_clip;
+    cfg.enable_face = !args.no_face;
 
     let pipeline = Pipeline::new(cfg);
     let output = if args.quiet {

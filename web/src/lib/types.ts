@@ -42,7 +42,8 @@ export interface PipelineReport {
 export type RunStatus =
   | { state: "running" }
   | { state: "completed" }
-  | { state: "failed"; error: string };
+  | { state: "failed"; error: string }
+  | { state: "cancelled" };
 
 export interface RunRecord {
   id: string;
@@ -167,4 +168,33 @@ export interface ExportResult {
   exported: number;
   failed: ApplyFailure[];
   target_dir: string;
+}
+
+/// One side of a cross-run keep-set comparison. `run_id` names the run the
+/// photo (and its thumb URL) belongs to.
+export interface RunDiffEntry {
+  run_id: string;
+  photo_id: string;
+  filename: string | null;
+  /// false ⇒ the file isn't in the other run at all (added/removed on disk);
+  /// true ⇒ same content present in both, but the verdict differs.
+  present_in_other: boolean;
+}
+
+export interface RunDiff {
+  run_id: string;
+  other_id: string;
+  kept_here: number;
+  kept_there: number;
+  added_kept: RunDiffEntry[];
+  removed_kept: RunDiffEntry[];
+  photos_only_here: number;
+  photos_only_there: number;
+}
+
+/// User-attached metadata for one photo, stored per-run in localStorage
+/// (same lifecycle as verdict overrides).
+export interface PhotoTag {
+  flag?: boolean;
+  note?: string;
 }

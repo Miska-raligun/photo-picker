@@ -148,7 +148,17 @@ fn build_photo_ref(path: PathBuf, format: ImageFormat) -> Result<PhotoRef> {
     let meta = fs::metadata(&path).map_err(|e| Error::Io { path: path.clone(), source: e })?;
     let file_size = meta.len();
     let sha256_short = hash_prefix(&path)?;
-    let exif_info = extract_exif_info(&path).unwrap_or_default();
+    // kamadak-exif walks TIFF/JPEG containers; CR3 (ISO BMFF) and RAF error
+    // out. Fall back to rawler's vendor-aware metadata decoders for RAW so
+    // those photos keep their timestamp (Stage A time clustering) and ISO.
+    let exif_info = extract_exif_info(&path).ok().or_else(|| {
+        if matches!(format, ImageFormat::Raw(_)) {
+            super::exif::extract_exif_info_via_rawler(&path)
+        } else {
+            None
+        }
+    })
+    .unwrap_or_default();
 
     Ok(PhotoRef {
         id: PhotoId::new(),

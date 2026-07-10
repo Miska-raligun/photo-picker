@@ -29,6 +29,12 @@ pub enum Error {
 
     #[error("scan produced zero usable photos under {root}")]
     EmptyScan { root: PathBuf },
+
+    /// The pipeline observed its cancellation flag and stopped early. Not a
+    /// failure of the input — callers typically map this to a distinct
+    /// "cancelled" status rather than an error banner.
+    #[error("cancelled")]
+    Cancelled,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

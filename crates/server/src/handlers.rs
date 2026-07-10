@@ -7,8 +7,7 @@ use photo_pick_core::ingest::{
     classify_extension, decode_thumbnail_for, encode_jpeg, PhotoSource, ThumbnailSpec,
 };
 use photo_pick_core::models::ExecutionProvider;
-use photo_pick_core::pipeline::{LinkMode, Pipeline, PipelineConfig};
-use photo_pick_core::scoring::TechWeights;
+use photo_pick_core::pipeline::{normalize_k2, LinkMode, Pipeline, PipelineConfig};
 use photo_pick_core::vlm::{
     explain_group_prompt, AnthropicProvider, OpenAiProvider, VlmImage, VlmProvider, VlmRequest,
 };
@@ -258,6 +257,15 @@ pub async fn scan(
         .await
         .insert(run_id.clone(), progress_stream.clone());
 
+    // Cancellation flag: flipped by POST /api/runs/:id/cancel or shutdown,
+    // observed by the pipeline at its checkpoints.
+    let cancel_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    state
+        .cancel_flags
+        .lock()
+        .await
+        .insert(run_id.clone(), cancel_flag.clone());
+
     let runs = state.runs.clone();
     let semaphore = state.scan_semaphore.clone();
     let progress_streams = state.progress_streams.clone();
@@ -276,49 +284,42 @@ pub async fn scan(
         let runs_inner = runs.clone();
         let progress_stream_inner = progress_stream.clone();
         let run_id_for_blocking = run_id_for_task.clone();
+        let cancel_for_blocking = cancel_flag.clone();
         let _ = tokio::task::spawn_blocking(move || {
-        let cfg = PipelineConfig {
-            source: source_for_task,
-            output: artifacts_for_task.clone(),
-            report_path: Some(report_path),
-            html_report_path: Some(html_report_path.clone()),
-            cache_path: Some(cache_path),
-            stage_a: StageAParams {
-                k_time: req_for_task.time_k,
-                min_dt: Duration::from_secs_f32(req_for_task.min_dt),
-                max_dt: Duration::from_secs_f32(req_for_task.max_dt),
-                max_hash_dist: req_for_task.hash_dist,
-                clip_threshold: req_for_task.stage_a_clip_threshold,
-            },
-            stage_b: StageBParams {
-                similarity_threshold: req_for_task.stage_b_threshold,
-                chain_margin: StageBParams::default().chain_margin,
-            },
-            k1: req_for_task.k1,
-            k2: match req_for_task.k2 {
-                Some(0) | None => None,
-                Some(k) => Some(k),
-            },
-            tech_weights: TechWeights::default(),
-            link_mode: parse_link_mode(&req_for_task.link_mode),
-            thumbnail: ThumbnailSpec {
-                long_edge: req_for_task.thumbnail_long_edge.clamp(512, 4096),
-            },
-            dry_run: false,
-            enable_clip: req_for_task.enable_clip,
-            enable_face: req_for_task.enable_face,
-            // Runs are always analyze-only now; the user exports keepers or
-            // deletes rejects after reviewing, via the deferred endpoints.
-            materialize_picks: false,
-            execution_provider: parse_provider(&req_for_task.execution_provider),
-            adaptive_thresholds: req_for_task.adaptive_thresholds,
-            thumb_cache_dir: Some(artifacts_for_task.join(".thumbs")),
+        // Shared defaults + only the knobs the API exposes. Fields the server
+        // intentionally pins: materialize_picks=false (runs are analyze-only;
+        // export/apply are deferred endpoints) and dry_run=false.
+        let mut cfg = PipelineConfig::with_defaults(source_for_task, artifacts_for_task.clone());
+        cfg.report_path = Some(report_path);
+        cfg.html_report_path = Some(html_report_path.clone());
+        cfg.cache_path = Some(cache_path);
+        cfg.stage_a = StageAParams {
+            k_time: req_for_task.time_k,
+            min_dt: Duration::from_secs_f32(req_for_task.min_dt),
+            max_dt: Duration::from_secs_f32(req_for_task.max_dt),
+            max_hash_dist: req_for_task.hash_dist,
+            clip_threshold: req_for_task.stage_a_clip_threshold,
         };
+        cfg.stage_b = StageBParams {
+            similarity_threshold: req_for_task.stage_b_threshold,
+            chain_margin: StageBParams::default().chain_margin,
+        };
+        cfg.k1 = req_for_task.k1;
+        cfg.k2 = normalize_k2(req_for_task.k2);
+        cfg.link_mode = parse_link_mode(&req_for_task.link_mode);
+        cfg.thumbnail = ThumbnailSpec {
+            long_edge: req_for_task.thumbnail_long_edge.clamp(512, 4096),
+        };
+        cfg.enable_clip = req_for_task.enable_clip;
+        cfg.enable_face = req_for_task.enable_face;
+        cfg.materialize_picks = false;
+        cfg.execution_provider = parse_provider(&req_for_task.execution_provider);
+        cfg.adaptive_thresholds = req_for_task.adaptive_thresholds;
         let pipeline = Pipeline::new(cfg);
         let sink = crate::state::ChannelProgressSink {
             stream: progress_stream_inner.clone(),
         };
-        let result = pipeline.run(&sink);
+        let result = pipeline.run_with_cancel(&sink, &cancel_for_blocking);
         // Send a terminal Done so SSE clients know to stop subscribing.
         progress_stream_inner.record(crate::state::ProgressEvent::Done {
             ok: result.is_ok(),
@@ -333,12 +334,17 @@ pub async fn scan(
                     rec.composition_picks = output.composition_picks;
                     rec.photos = output.photos;
                 }
+                Err(photo_pick_core::error::Error::Cancelled) => {
+                    rec.status = RunStatus::Cancelled;
+                }
                 Err(e) => {
                     rec.status = RunStatus::Failed { error: e.to_string() };
                 }
             }
         }
         }).await;
+        // The run is terminal — its cancel flag has no further effect.
+        state_for_task.cancel_flags.lock().await.remove(&run_id_for_task);
         // Persist the run index to disk so the list survives restarts. Best
         // effort — errors are logged inside `persist_runs`.
         state_for_task.persist_runs().await;
@@ -355,6 +361,34 @@ pub async fn scan(
     });
 
     Ok(Json(serde_json::json!({ "run_id": run_id })))
+}
+
+/// Request cancellation of a running scan. Sets the run's cancellation flag;
+/// the pipeline observes it at its next checkpoint (per photo during feature
+/// extraction, per stage elsewhere) and winds down with status `cancelled`.
+/// Features extracted before the flag flipped stay in the cache, so a re-scan
+/// of the same folder resumes from where this one stopped.
+pub async fn cancel_run(
+    State(state): State<AppState>,
+    Path(run_id): Path<String>,
+) -> impl IntoResponse {
+    let flags = state.cancel_flags.lock().await;
+    match flags.get(&run_id) {
+        Some(flag) => {
+            flag.store(true, std::sync::atomic::Ordering::Relaxed);
+            StatusCode::ACCEPTED.into_response()
+        }
+        None => {
+            // Either an unknown id or a run already in a terminal state.
+            // Look at the run map to give an accurate error.
+            drop(flags);
+            let runs = state.runs.lock().await;
+            match runs.get(&run_id) {
+                Some(_) => (StatusCode::CONFLICT, "run is not running").into_response(),
+                None => (StatusCode::NOT_FOUND, "run not found").into_response(),
+            }
+        }
+    }
 }
 
 /// SSE stream of `ProgressEvent`s for a single run. New subscribers receive
@@ -705,6 +739,85 @@ pub async fn get_run(
     resp["composition_picks"] = serde_json::Value::Array(picks_view);
 
     Json(resp).into_response()
+}
+
+/// Compare two runs' algorithmic keep-sets, matching photos across runs by
+/// content hash (photo ids are per-run). Answers "what did this scan keep
+/// that the other didn't?" — the "did my parameter change help" workflow.
+/// User verdict overrides live in the browser and are NOT folded in here.
+pub async fn diff_runs(
+    State(state): State<AppState>,
+    Path((run_id, other_id)): Path<(String, String)>,
+) -> impl IntoResponse {
+    state.ensure_rehydrated(&run_id).await;
+    state.ensure_rehydrated(&other_id).await;
+    let guard = state.runs.lock().await;
+    let (Some(a), Some(b)) = (guard.get(&run_id), guard.get(&other_id)) else {
+        return (StatusCode::NOT_FOUND, "run not found").into_response();
+    };
+    if a.composition_picks.is_empty() || b.composition_picks.is_empty() {
+        return (
+            StatusCode::CONFLICT,
+            "both runs need composition data (completed scans with CLIP enabled)",
+        )
+            .into_response();
+    }
+
+    // sha256_short → (photo_id, filename) for the algorithm's kept set.
+    let kept_by_sha = |rec: &RunRecord| -> HashMap<[u8; 16], (String, Option<String>)> {
+        let mut out = HashMap::new();
+        for cp in &rec.composition_picks {
+            for (pid, _) in &cp.kept {
+                if let Some(p) = rec.photos.get(pid) {
+                    let name = p.path.file_name().map(|n| n.to_string_lossy().to_string());
+                    out.insert(p.sha256_short, (pid.0.to_string(), name));
+                }
+            }
+        }
+        out
+    };
+    let all_shas = |rec: &RunRecord| -> std::collections::HashSet<[u8; 16]> {
+        rec.photos.values().map(|p| p.sha256_short).collect()
+    };
+
+    let kept_a = kept_by_sha(a);
+    let kept_b = kept_by_sha(b);
+    let shas_a = all_shas(a);
+    let shas_b = all_shas(b);
+
+    let entry = |run: &str, id: &String, name: &Option<String>, in_other: bool| {
+        serde_json::json!({
+            "run_id": run,
+            "photo_id": id,
+            "filename": name,
+            // false ⇒ the photo isn't in the other run at all (new/removed
+            // file), true ⇒ same content, different verdict.
+            "present_in_other": in_other,
+        })
+    };
+    // Kept here but not kept there.
+    let added: Vec<_> = kept_a
+        .iter()
+        .filter(|(sha, _)| !kept_b.contains_key(*sha))
+        .map(|(sha, (id, name))| entry(&run_id, id, name, shas_b.contains(sha)))
+        .collect();
+    let removed: Vec<_> = kept_b
+        .iter()
+        .filter(|(sha, _)| !kept_a.contains_key(*sha))
+        .map(|(sha, (id, name))| entry(&other_id, id, name, shas_a.contains(sha)))
+        .collect();
+
+    Json(serde_json::json!({
+        "run_id": run_id,
+        "other_id": other_id,
+        "kept_here": kept_a.len(),
+        "kept_there": kept_b.len(),
+        "added_kept": added,
+        "removed_kept": removed,
+        "photos_only_here": shas_a.difference(&shas_b).count(),
+        "photos_only_there": shas_b.difference(&shas_a).count(),
+    }))
+    .into_response()
 }
 
 fn photo_view(

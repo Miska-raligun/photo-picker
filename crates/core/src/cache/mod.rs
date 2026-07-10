@@ -145,9 +145,21 @@ impl CacheStore {
         };
 
         let clip_embed = clip_bytes.map(|b| bytes_to_f32_vec(&b));
-        let face = face_json
-            .as_deref()
-            .and_then(|s| serde_json::from_str::<FaceInfo>(s).ok());
+        // A face blob that fails to parse means the row is damaged (or from a
+        // buggy writer). Returning the row with `face: None` would silently
+        // reclassify a portrait as landscape (face_bonus weight drops to 0),
+        // so treat the whole row as a miss instead: the caller re-extracts
+        // and overwrites the bad row with fresh data.
+        let face = match face_json.as_deref() {
+            None => None,
+            Some(s) => match serde_json::from_str::<FaceInfo>(s) {
+                Ok(f) => Some(f),
+                Err(err) => {
+                    tracing::warn!(sha = %key, %err, "cache row has corrupt face JSON; treating as miss");
+                    return Ok(None);
+                }
+            },
+        };
 
         Ok(Some(PhotoFeatures {
             photo_id: for_id,
@@ -167,10 +179,18 @@ impl CacheStore {
     pub fn put(&self, sha256_short: &[u8; 16], features: &PhotoFeatures) -> Result<()> {
         let key = hex::encode(sha256_short);
         let clip_bytes: Option<Vec<u8>> = features.clip_embed.as_ref().map(|v| f32_vec_to_bytes(v));
-        let face_json: Option<String> = features
-            .face
-            .as_ref()
-            .map(|f| serde_json::to_string(f).unwrap_or_default());
+        // On the (practically impossible) chance FaceInfo fails to serialize,
+        // store NULL rather than "" — an empty string is exactly the corrupt
+        // blob the read path would then reject as a miss on every lookup.
+        let face_json: Option<String> = features.face.as_ref().and_then(|f| {
+            match serde_json::to_string(f) {
+                Ok(s) => Some(s),
+                Err(err) => {
+                    tracing::warn!(%err, "face info failed to serialize; caching row without it");
+                    None
+                }
+            }
+        });
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as i64)
@@ -310,5 +330,25 @@ mod tests {
         let cache = CacheStore::open(&dir.path().join("c.db")).unwrap();
         let got = cache.get(&[0; 16], PhotoId::new()).unwrap();
         assert!(got.is_none());
+    }
+
+    #[test]
+    fn corrupt_face_json_is_a_miss_not_a_silent_downgrade() {
+        let dir = tempdir().unwrap();
+        let cache = CacheStore::open(&dir.path().join("c.db")).unwrap();
+        let key = [0x0F; 16];
+        let feat = PhotoFeatures::hashes_only(PhotoId::new(), 0xAA, 0xBB);
+        cache.put(&key, &feat).unwrap();
+        // Simulate a damaged row (legacy writer / partial write).
+        cache
+            .conn
+            .execute(
+                "UPDATE features SET face_info_json = '{broken' WHERE sha256_short = ?1",
+                params![hex::encode(key)],
+            )
+            .unwrap();
+        // Must come back as a miss so the pipeline re-extracts, NOT as a row
+        // with face silently dropped (which would misclassify portraits).
+        assert!(cache.get(&key, PhotoId::new()).unwrap().is_none());
     }
 }

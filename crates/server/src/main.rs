@@ -4,6 +4,10 @@ use std::net::SocketAddr;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Bridge the optional config file into PHOTO_PICK_* env vars before
+    // anything reads them. Explicit env vars always win over the file.
+    photo_pick_server::config::apply_config_file();
+
     // Silence rawler's "Decoder has no preview image support" WARNs — we treat
     // them as expected (we always have an EXIF/byte-scan fallback). Override
     // by setting RUST_LOG.
@@ -23,6 +27,8 @@ async fn main() -> Result<()> {
     // after a restart. Detail (composition_picks/photos) is lazy-loaded on
     // first access via the report.json on disk.
     state.load_from_disk().await;
+    // Kept for the post-serve shutdown hooks; `router` consumes the original.
+    let shutdown_state = state.clone();
     let app = router(state);
 
     let listener = match tokio::net::TcpListener::bind(addr).await {
@@ -38,6 +44,35 @@ async fn main() -> Result<()> {
         }
     };
     println!("photo-pick server listening on http://{addr}");
-    axum::serve(listener, app).await?;
+    // Graceful shutdown on Ctrl+C / SIGTERM: stop accepting connections, let
+    // in-flight requests finish, flip every scan's cancellation flag so
+    // running pipelines stop at their next checkpoint, and persist the run
+    // index one final time. The runs.json write is already atomic
+    // (tmp+rename), so this is about promptness, not corruption.
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
+    shutdown_state.cancel_all_runs().await;
+    shutdown_state.persist_runs().await;
     Ok(())
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c().await.expect("install Ctrl+C handler");
+    };
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("install SIGTERM handler")
+            .recv()
+            .await;
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
+    println!("photo-pick: shutting down…");
 }

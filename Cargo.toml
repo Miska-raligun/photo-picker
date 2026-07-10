@@ -7,7 +7,7 @@ members = [
 ]
 
 [workspace.package]
-version      = "0.5.0"
+version      = "0.6.0"
 edition      = "2021"
 rust-version = "1.80"
 license      = "MIT OR Apache-2.0"
@@ -41,7 +41,7 @@ rusqlite          = { version = "0.32", features = ["bundled"] }
 bytemuck          = "1"
 # Server stack (M4+)
 axum              = "0.7"
-tokio             = { version = "1", features = ["rt-multi-thread", "macros", "fs", "sync"] }
+tokio             = { version = "1", features = ["rt-multi-thread", "macros", "fs", "sync", "signal"] }
 tower             = "0.5"
 tower-http        = { version = "0.6", features = ["trace", "cors"] }
 # RAW preview extraction (LGPL-2.1) — handles vendor MakerNote layouts so
@@ -53,6 +53,7 @@ futures-util      = "0.3"
 trash             = "5"
 rust-embed        = "8"
 mime_guess        = "2"
+toml              = "0.8"
 
 [profile.release]
 lto           = "thin"

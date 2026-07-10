@@ -2039,7 +2039,7 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
 name = "photo-pick"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -2052,7 +2052,7 @@ dependencies = [
 
 [[package]]
 name = "photo-pick-core"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "base64",
  "bytemuck",
@@ -2080,20 +2080,23 @@ dependencies = [
 
 [[package]]
 name = "photo-pick-server"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "axum",
  "chrono",
  "dirs",
  "futures-util",
+ "http-body-util",
  "mime_guess",
  "photo-pick-core",
  "rust-embed",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tokio-stream",
+ "toml",
  "tower",
  "tower-http",
  "tracing",
@@ -2726,6 +2729,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 
 [[package]]
+name = "signal-hook-registry"
+version = "1.4.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c4db69cba1110affc0e9f7bcd48bbf87b3f4fc7c61fc9155afd4c469eb3d6c1b"
+dependencies = [
+ "errno",
+ "libc",
+]
+
+[[package]]
 name = "simd-adler32"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2937,6 +2950,7 @@ dependencies = [
  "libc",
  "mio",
  "pin-project-lite",
+ "signal-hook-registry",
  "socket2",
  "tokio-macros",
  "windows-sys 0.61.2",

@@ -2,6 +2,7 @@ import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronLeft,
   ChevronRight,
+  Flag,
   ImageOff,
   Loader2,
   Maximize2,
@@ -34,6 +35,7 @@ import { useI18n, useM } from "@/lib/i18n";
 import type {
   CompositionPickView,
   ExplanationRecord,
+  PhotoTag,
   PhotoView,
   RunRecord,
   VlmSettings,
@@ -53,6 +55,9 @@ interface Props {
   /// Set of photo ids whose algorithmic verdict the user has flipped.
   /// A flipped kept→drop. A flipped rejected→keep.
   overrides: Set<string>;
+  /// User flags/notes per photo id (persisted per-run, like overrides).
+  tags: Map<string, PhotoTag>;
+  onSetTag: (photoId: string, tag: PhotoTag) => void;
   inPlace: boolean;
   vlmSettings: VlmSettings;
   onOpenSettings: () => void;
@@ -67,6 +72,8 @@ export function GroupDetailDialog({
   groupCount,
   onNavigate,
   overrides,
+  tags,
+  onSetTag,
   inPlace,
   vlmSettings,
   onOpenSettings,
@@ -216,7 +223,7 @@ export function GroupDetailDialog({
   // "algorithm order, show everything" behaviour, so nothing surprises
   // users who don't touch the toolbar.
   type SortMode = "algo" | "ai" | "score" | "time";
-  type FilterMode = "all" | "kept" | "rejected" | "overridden" | "lowiso";
+  type FilterMode = "all" | "kept" | "rejected" | "overridden" | "flagged" | "lowiso";
   const [sortMode, setSortMode] = useState<SortMode>("algo");
   const [filterMode, setFilterMode] = useState<FilterMode>("all");
 
@@ -332,6 +339,8 @@ export function GroupDetailDialog({
           return !item.kept;
         case "overridden":
           return overrides.has(item.p.photo_id);
+        case "flagged":
+          return !!tags.get(item.p.photo_id)?.flag;
         case "lowiso":
           return item.p.iso != null && item.p.iso <= 800;
         default:
@@ -366,7 +375,7 @@ export function GroupDetailDialog({
       }
     });
     return sorted;
-  }, [rawDisplayList, filterMode, sortMode, aiByPhotoId, overrides]);
+  }, [rawDisplayList, filterMode, sortMode, aiByPhotoId, overrides, tags]);
 
   const total = pick ? pick.kept.length + pick.rejected.length : 0;
   // Final "will be kept" count after user flips: algo-kept minus flipped-kept,
@@ -467,6 +476,7 @@ export function GroupDetailDialog({
                     ["kept", m.detail.filterKept],
                     ["rejected", m.detail.filterRejected],
                     ["overridden", m.detail.filterOverridden],
+                    ["flagged", m.detail.filterFlagged],
                     ["lowiso", m.detail.filterLowIso],
                   ] as const
                 ).map(([key, label]) => (
@@ -541,10 +551,15 @@ export function GroupDetailDialog({
                         kept={kept}
                         overridden={overrides.has(p.photo_id)}
                         selected={selectedIds.has(p.photo_id)}
+                        tag={tags.get(p.photo_id)}
                         inPlace={inPlace}
                         aiRank={aiByPhotoId?.get(p.photo_id)?.rank}
                         aiReason={aiByPhotoId?.get(p.photo_id)?.reason}
                         onCardClick={(e) => handleCardClick(e, p.photo_id, i)}
+                        onToggleFlag={() => {
+                          const cur = tags.get(p.photo_id) ?? {};
+                          onSetTag(p.photo_id, { ...cur, flag: !cur.flag });
+                        }}
                         onToggleOverride={() => onToggleOverride(p.photo_id)}
                         onViewOriginal={() => setLightboxIndex(i)}
                       />
@@ -734,6 +749,12 @@ export function GroupDetailDialog({
                 ? () => onToggleOverride(photo.photo_id)
                 : undefined
             }
+            tag={open && photo ? tags.get(photo.photo_id) ?? null : null}
+            onSetTag={
+              open && photo
+                ? (t) => onSetTag(photo.photo_id, t)
+                : undefined
+            }
           />
         );
       })()}
@@ -840,6 +861,9 @@ interface PhotoCardProps {
   /// Whether the card is part of the current multi-select working set.
   /// Visual-only — bulk actions live in the parent's toolbar.
   selected: boolean;
+  /// The user's flag/note for this photo, if any.
+  tag?: PhotoTag;
+  onToggleFlag: () => void;
   inPlace: boolean;
   /// The VLM's independent rank (1 = best) — shown as overlay badge when present.
   aiRank?: number;
@@ -862,6 +886,8 @@ function PhotoCardImpl({
   kept,
   overridden,
   selected,
+  tag,
+  onToggleFlag,
   inPlace,
   aiRank,
   aiReason,
@@ -965,6 +991,27 @@ function PhotoCardImpl({
         >
           <Maximize2 className="h-4 w-4" />
         </button>
+        {/* Flag toggle: persistent when flagged, hover-revealed otherwise.
+            Stops propagation so flagging never flips the verdict. */}
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleFlag();
+          }}
+          onKeyDown={(e) => e.stopPropagation()}
+          title={tag?.flag ? m.detail.unflag : m.detail.flag}
+          aria-label={tag?.flag ? m.detail.unflag : m.detail.flag}
+          aria-pressed={!!tag?.flag}
+          className={cn(
+            "absolute bottom-2 left-2 rounded-md backdrop-blur-sm p-1.5 transition-opacity",
+            tag?.flag
+              ? "bg-amber-500/90 text-white opacity-100"
+              : "bg-black/55 text-white opacity-0 group-hover:opacity-100 focus:opacity-100 hover:bg-black/75"
+          )}
+        >
+          <Flag className={cn("h-4 w-4", tag?.flag && "fill-current")} />
+        </button>
       </div>
       <div className="p-3 space-y-2 flex flex-col flex-1">
         <div
@@ -981,6 +1028,11 @@ function PhotoCardImpl({
               {m.detail.aiRank}{aiRank != null ? ` #${aiRank}` : ""}:
             </span>
             <span className="italic">{aiReason}</span>
+          </div>
+        )}
+        {tag?.note?.trim() && (
+          <div className="border-l-2 border-amber-500 bg-amber-500/5 rounded-r-md px-2.5 py-1.5 text-xs leading-snug text-foreground/80 mt-1 whitespace-pre-wrap">
+            {tag.note}
           </div>
         )}
       </div>
