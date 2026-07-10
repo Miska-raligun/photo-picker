@@ -13,13 +13,19 @@ path = "src/main.rs"
 path = "src/lib.rs"
 
 [features]
-# Pass-through so a release build can ask core to download the onnxruntime
-# static lib for the build target (CI cross-platform builds). Default builds
-# inherit core's default `onnx` feature + the vendored lib.
-onnx-download = ["photo-pick-core/onnx-download"]
+# Default builds carry the ONNX models (CLIP + YuNet). `--no-default-features`
+# builds the full HTTP surface without linking onnxruntime — scans degrade to
+# pHash-only, but every non-inference endpoint (browse/apply/export/…) works.
+# That is also what lets the handler integration tests compile + run in
+# environments without the static lib.
+default = ["onnx"]
+onnx = ["photo-pick-core/onnx"]
+# Like `onnx`, but ort downloads a prebuilt onnxruntime static lib for the
+# build target (CI cross-platform builds) instead of using the vendored one.
+onnx-download = ["onnx", "photo-pick-core/onnx-download"]
 
 [dependencies]
-photo-pick-core    = { path = "../core", default-features = true }
+photo-pick-core    = { path = "../core", default-features = false }
 axum               = { workspace = true }
 tokio              = { workspace = true }
 tower              = { workspace = true }
@@ -37,3 +43,8 @@ mime_guess         = { workspace = true }
 tokio-stream       = { workspace = true }
 futures-util       = { workspace = true }
 chrono             = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+tower    = { workspace = true, features = ["util"] }
+http-body-util = "0.1"

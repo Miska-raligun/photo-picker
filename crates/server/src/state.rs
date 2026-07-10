@@ -14,6 +14,10 @@ pub enum RunStatus {
     Running,
     Completed,
     Failed { error: String },
+    /// Stopped early by an explicit user request (POST /api/runs/:id/cancel)
+    /// or server shutdown. Distinct from `Failed` so the UI can render it as
+    /// a neutral outcome instead of an error banner.
+    Cancelled,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -281,6 +285,11 @@ pub struct AppState {
     /// The inner Mutex is held only for the rehydrate work; outer Mutex is
     /// just for the lookup/insert into the per-id map.
     pub rehydrate_locks: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
+    /// Per-run cancellation flags. Inserted when a scan starts, flipped by
+    /// POST /api/runs/:id/cancel (or server shutdown), observed by
+    /// `Pipeline::run_with_cancel` at stage boundaries and per photo in the
+    /// feature-extraction loop. Removed when the run reaches a terminal state.
+    pub cancel_flags: Arc<Mutex<HashMap<String, Arc<std::sync::atomic::AtomicBool>>>>,
 }
 
 impl AppState {
@@ -320,6 +329,18 @@ impl AppState {
             thumb_cache: Arc::new(ThumbCache::new(thumb_cache_mb * 1024 * 1024)),
             runs_index_path,
             rehydrate_locks: Arc::new(Mutex::new(HashMap::new())),
+            cancel_flags: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    /// Flip every live cancellation flag. Called on graceful shutdown so
+    /// in-flight pipelines stop at their next checkpoint instead of burning
+    /// CPU on a scan whose server is going away.
+    pub async fn cancel_all_runs(&self) {
+        let flags = self.cancel_flags.lock().await;
+        for (run_id, flag) in flags.iter() {
+            flag.store(true, std::sync::atomic::Ordering::Relaxed);
+            tracing::info!(run_id, "cancelling run for shutdown");
         }
     }
 

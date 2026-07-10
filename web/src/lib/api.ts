@@ -151,6 +151,18 @@ export const api = {
     return `/api/runs/${runId}/report.json`;
   },
 
+  /// Request cancellation of a running scan. 202 = flag set (the run winds
+  /// down at its next checkpoint and lands in status "cancelled"); 409 = the
+  /// run already finished; 404 = unknown id. Features extracted before the
+  /// cancel stay cached, so re-running the same folder resumes from there.
+  async cancelRun(runId: string): Promise<void> {
+    const resp = await fetch(`/api/runs/${runId}/cancel`, { method: "POST" });
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => resp.statusText);
+      throw new ApiError(resp.status, text || resp.statusText);
+    }
+  },
+
   /// Ask the server to open `path` in the OS file manager. Best-effort: a
   /// 403 means the path falls outside `PHOTO_PICK_BROWSE_ROOTS`, anything
   /// else means the platform's reveal command failed (xdg-open missing in

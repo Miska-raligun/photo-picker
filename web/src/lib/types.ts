@@ -42,7 +42,8 @@ export interface PipelineReport {
 export type RunStatus =
   | { state: "running" }
   | { state: "completed" }
-  | { state: "failed"; error: string };
+  | { state: "failed"; error: string }
+  | { state: "cancelled" };
 
 export interface RunRecord {
   id: string;

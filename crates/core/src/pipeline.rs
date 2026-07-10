@@ -24,7 +24,7 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -119,6 +119,47 @@ pub struct PipelineOutput {
     pub photos: HashMap<PhotoId, PhotoRef>,
 }
 
+impl PipelineConfig {
+    /// Shared defaults for everything that isn't source/output-specific.
+    /// Both entry points (CLI flags, server ScanRequest) start from this and
+    /// override only the knobs they actually expose, so a new config field
+    /// gets one default here instead of two hand-copied ones that drift.
+    pub fn with_defaults(source: PhotoSource, output: PathBuf) -> Self {
+        let thumb_cache_dir = Some(output.join(".thumbs"));
+        Self {
+            source,
+            output,
+            report_path: None,
+            html_report_path: None,
+            cache_path: None,
+            stage_a: StageAParams::default(),
+            stage_b: StageBParams::default(),
+            k1: 3,
+            k2: None,
+            tech_weights: TechWeights::default(),
+            link_mode: LinkMode::Hardlink,
+            thumbnail: ThumbnailSpec::default(),
+            dry_run: false,
+            enable_clip: true,
+            enable_face: true,
+            materialize_picks: true,
+            execution_provider: ExecutionProvider::Cpu,
+            adaptive_thresholds: true,
+            thumb_cache_dir,
+        }
+    }
+}
+
+/// Normalize a user-facing K2 value: `0` is CLI/API shorthand for "auto"
+/// (same as omitting it). Shared by the CLI flag and the server request so
+/// the two entry points can't disagree about what 0 means.
+pub fn normalize_k2(k2: Option<usize>) -> Option<usize> {
+    match k2 {
+        Some(0) | None => None,
+        Some(k) => Some(k),
+    }
+}
+
 pub struct Pipeline {
     cfg: PipelineConfig,
 }
@@ -128,7 +169,28 @@ impl Pipeline {
         Self { cfg }
     }
 
+    /// Run to completion with no external cancellation.
     pub fn run(&self, progress: &dyn ProgressSink) -> Result<PipelineOutput> {
+        self.run_with_cancel(progress, &AtomicBool::new(false))
+    }
+
+    /// Run the pipeline, checking `cancel` at each stage boundary and per
+    /// photo inside the (dominant-cost) feature-extraction loop. When the
+    /// flag flips to `true` the pipeline returns [`Error::Cancelled`] at the
+    /// next checkpoint — partial cache writes up to that point are kept (they
+    /// are valid, content-keyed data that speeds up the next attempt).
+    pub fn run_with_cancel(
+        &self,
+        progress: &dyn ProgressSink,
+        cancel: &AtomicBool,
+    ) -> Result<PipelineOutput> {
+        let check = || -> Result<()> {
+            if cancel.load(Ordering::Relaxed) {
+                Err(crate::error::Error::Cancelled)
+            } else {
+                Ok(())
+            }
+        };
         let start = Instant::now();
 
         // 1. Scan
@@ -142,6 +204,7 @@ impl Pipeline {
         };
         progress.on_finish(Stage::Scan);
         tracing::info!(count = photos.len(), "scan complete");
+        check()?;
 
         // 2a. Open the cache, look up features by content hash. Photos we
         //     already know about get attached features now; the rest go to the
@@ -277,6 +340,14 @@ impl Pipeline {
             let pairs: Vec<(PhotoId, [u8; 16], PhotoFeatures)> = to_extract
                 .par_iter()
                 .filter_map(|p| {
+                    // Cancellation check per photo: this loop is where a large
+                    // scan spends minutes, so a flag flip should stop new
+                    // decode/inference work within one item's latency. Photos
+                    // already extracted stay in `pairs` and get persisted to
+                    // the cache below before the Cancelled error surfaces.
+                    if cancel.load(Ordering::Relaxed) {
+                        return None;
+                    }
                     let thumb = match decode_thumbnail_for(p, self.cfg.thumbnail) {
                         Ok(t) => t,
                         Err(err) => {
@@ -318,6 +389,10 @@ impl Pipeline {
         for (id, _, feat) in extracted_pairs {
             features.insert(id, feat);
         }
+        // Checked AFTER the cache write above so a cancelled run still keeps
+        // every feature it paid for — the next scan of the same folder
+        // resumes from the cache instead of starting over.
+        check()?;
 
         // 2d. Optional adaptive-threshold bias: shifts CLIP thresholds based
         //     on the fraction of photos with a non-trivial face. Portrait
@@ -364,6 +439,7 @@ impl Pipeline {
         progress.on_stage(Stage::Cluster, 0);
         let groups: Vec<Group> = cluster_stage_a(&photos, &features, &stage_a_params, progress);
         progress.on_finish(Stage::Cluster);
+        check()?;
         tracing::info!(group_count = groups.len(), "stage A complete");
 
         // 4. Per-group top-K1 tech-score selection
@@ -416,6 +492,8 @@ impl Pipeline {
         } else {
             vec![]
         };
+
+        check()?;
 
         // 7. Build the output plan, materialize, report
         let photos_by_id: HashMap<PhotoId, PhotoRef> =

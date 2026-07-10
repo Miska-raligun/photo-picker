@@ -3,6 +3,7 @@ import type { LucideIcon } from "lucide-react";
 import {
   AlertCircle,
   ArrowRight,
+  Ban,
   CheckCircle2,
   Clock,
   Database,
@@ -13,9 +14,11 @@ import {
   Loader2,
   XCircle,
 } from "lucide-react";
+import { toast } from "sonner";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { api } from "@/lib/api";
 import { useM } from "@/lib/i18n";
 import type { RunProgress, RunRecord } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -107,6 +110,13 @@ export function RunCard({ run, progress, onOpenDetail }: Props) {
           {m.runCard.completed}
         </Badge>
       );
+    if (state === "cancelled")
+      return (
+        <Badge variant="secondary" className="gap-1.5">
+          <Ban className="h-3 w-3" />
+          {m.runCard.cancelled}
+        </Badge>
+      );
     return (
       <Badge variant="destructive" className="gap-1.5">
         <AlertCircle className="h-3 w-3" />
@@ -120,7 +130,23 @@ export function RunCard({ run, progress, onOpenDetail }: Props) {
       ? m.runCard.scanComplete
       : state === "failed"
       ? m.runCard.scanFailed
+      : state === "cancelled"
+      ? m.runCard.scanCancelled
       : m.runCard.scanInProgress;
+
+  const [cancelling, setCancelling] = useState(false);
+  function requestCancel(e: React.MouseEvent) {
+    e.stopPropagation();
+    setCancelling(true);
+    api.cancelRun(run.id).catch((err) => {
+      setCancelling(false);
+      toast.error(m.runCard.cancelFailed, {
+        description: err instanceof Error ? err.message : String(err),
+      });
+    });
+    // No success toast — the card's status flips to "cancelled" on its own
+    // via the SSE done event, which is the real confirmation.
+  }
 
   return (
     <Card
@@ -151,7 +177,19 @@ export function RunCard({ run, progress, onOpenDetail }: Props) {
         {state === "running" && (
           <div className="space-y-1.5">
             <div className="flex items-center justify-between text-xs text-muted-foreground">
-              <span className="font-mono">{progress?.stage ?? m.runCard.starting}</span>
+              <span className="font-mono flex items-center gap-2">
+                {progress?.stage ?? m.runCard.starting}
+                <button
+                  type="button"
+                  onClick={requestCancel}
+                  disabled={cancelling}
+                  className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 border border-border text-muted-foreground hover:text-destructive hover:border-destructive/40 disabled:opacity-50 transition-colors"
+                  title={m.runCard.cancelTitle}
+                >
+                  <Ban className="h-3 w-3" />
+                  {cancelling ? m.runCard.cancelling : m.runCard.cancel}
+                </button>
+              </span>
               {progress && progress.total > 0 && (
                 <span className="tabular-nums">
                   {progress.done} / {progress.total}
