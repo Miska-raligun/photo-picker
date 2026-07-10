@@ -9,6 +9,7 @@ import {
   Download,
   ExternalLink,
   FolderClosed,
+  GitCompareArrows,
   Images,
   Layers,
   LayoutGrid,
@@ -24,19 +25,30 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { GroupCard } from "./GroupCard";
 import { ApplyBar } from "./ApplyBar";
 import { ExportDialog } from "./ExportDialog";
+import { Thumb } from "./Thumb";
 import { api } from "@/lib/api";
 import { useM } from "@/lib/i18n";
-import type { ApplyResult, RunRecord } from "@/lib/types";
+import type { ApplyResult, RunDiff, RunDiffEntry, RunRecord } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 interface Props {
   open: boolean;
   onOpenChange: (v: boolean) => void;
   run: RunRecord | null;
+  /// Other completed runs, offered as comparison targets ("did my parameter
+  /// tweak keep different photos?").
+  otherRuns: RunRecord[];
   overrides: Set<string>;
   onOpenGroup: (pickIndex: number) => void;
   onApplyDone: (result: ApplyResult) => void;
@@ -46,6 +58,7 @@ export function RunDetailDialog({
   open,
   onOpenChange,
   run,
+  otherRuns,
   overrides,
   onOpenGroup,
   onApplyDone,
@@ -173,6 +186,10 @@ export function RunDetailDialog({
               sourceRoot={run.root}
               onDone={onApplyDone}
             />
+          )}
+
+          {isCompleted && picks.length > 0 && otherRuns.length > 0 && (
+            <RunCompare runId={run.id} otherRuns={otherRuns} />
           )}
 
           <div className="flex items-center justify-between gap-2 pt-2 border-t">
@@ -329,6 +346,135 @@ function StatPill({
       />
       <span className="text-muted-foreground">{label}</span>
       <span className="font-semibold tabular-nums">{value}</span>
+    </div>
+  );
+}
+
+/// Cross-run keep-set comparison. Photos are matched across runs by content
+/// hash on the server, so "same file, different verdict" and "file only in
+/// one run" are distinguished (the latter gets a dashed ring).
+function RunCompare({ runId, otherRuns }: { runId: string; otherRuns: RunRecord[] }) {
+  const m = useM();
+  const [otherId, setOtherId] = useState<string>("");
+  const [diff, setDiff] = useState<RunDiff | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function selectOther(id: string) {
+    setOtherId(id);
+    setDiff(null);
+    setError(null);
+    if (!id) return;
+    setLoading(true);
+    api
+      .diffRuns(runId, id)
+      .then(setDiff)
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setLoading(false));
+  }
+
+  return (
+    <div className="rounded-lg border bg-card/50 px-4 py-3 space-y-3">
+      <div className="flex items-center gap-2 flex-wrap">
+        <GitCompareArrows className="h-4 w-4 text-muted-foreground shrink-0" />
+        <span className="text-sm font-medium">{m.compare.title}</span>
+        <Select value={otherId} onValueChange={selectOther}>
+          <SelectTrigger className="h-8 w-72 text-xs">
+            <SelectValue placeholder={m.compare.pickRun} />
+          </SelectTrigger>
+          <SelectContent>
+            {otherRuns.map((r) => (
+              <SelectItem key={r.id} value={r.id}>
+                <span className="font-mono">{r.id.slice(0, 8)}</span>
+                <span className="text-muted-foreground"> · {r.root}</span>
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        {loading && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
+        {diff && (
+          <span className="text-xs text-muted-foreground font-mono tabular-nums ml-auto">
+            {m.compare.keptCounts(diff.kept_here, diff.kept_there)}
+          </span>
+        )}
+      </div>
+      {error && (
+        <div className="text-xs text-muted-foreground bg-muted/60 rounded px-2.5 py-1.5">
+          {error}
+        </div>
+      )}
+      {diff && diff.added_kept.length === 0 && diff.removed_kept.length === 0 && (
+        <div className="text-xs text-muted-foreground">{m.compare.identical}</div>
+      )}
+      {diff && diff.added_kept.length > 0 && (
+        <DiffStrip
+          label={m.compare.addedKept(diff.added_kept.length)}
+          entries={diff.added_kept}
+          tone="add"
+          onlyHereHint={m.compare.notInOther}
+        />
+      )}
+      {diff && diff.removed_kept.length > 0 && (
+        <DiffStrip
+          label={m.compare.removedKept(diff.removed_kept.length)}
+          entries={diff.removed_kept}
+          tone="remove"
+          onlyHereHint={m.compare.notInOther}
+        />
+      )}
+      {diff && (diff.photos_only_here > 0 || diff.photos_only_there > 0) && (
+        <div className="text-[0.7rem] text-muted-foreground">
+          {m.compare.fileDelta(diff.photos_only_here, diff.photos_only_there)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DiffStrip({
+  label,
+  entries,
+  tone,
+  onlyHereHint,
+}: {
+  label: string;
+  entries: RunDiffEntry[];
+  tone: "add" | "remove";
+  onlyHereHint: string;
+}) {
+  const MAX_SHOWN = 24;
+  return (
+    <div className="space-y-1.5">
+      <div
+        className={cn(
+          "text-xs font-medium",
+          tone === "add" ? "text-[var(--success)]" : "text-destructive"
+        )}
+      >
+        {label}
+      </div>
+      <div className="flex gap-2 overflow-x-auto pb-1">
+        {entries.slice(0, MAX_SHOWN).map((e) => (
+          <div
+            key={`${e.run_id}:${e.photo_id}`}
+            className={cn(
+              "relative shrink-0 w-20 h-20 rounded-md overflow-hidden border-2",
+              tone === "add" ? "border-[var(--success)]/60" : "border-destructive/60",
+              !e.present_in_other && "border-dashed"
+            )}
+            title={
+              (e.filename ?? e.photo_id) + (e.present_in_other ? "" : ` — ${onlyHereHint}`)
+            }
+          >
+            <Thumb src={api.thumbUrl(e.run_id, e.photo_id)} alt={e.filename ?? e.photo_id} />
+          </div>
+        ))}
+        {entries.length > MAX_SHOWN && (
+          <div className="shrink-0 w-20 h-20 rounded-md border border-dashed grid place-items-center text-xs text-muted-foreground">
+            +{entries.length - MAX_SHOWN}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

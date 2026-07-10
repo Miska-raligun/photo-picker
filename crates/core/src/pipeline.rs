@@ -539,6 +539,25 @@ impl Pipeline {
             )?;
         }
 
+        // Opt-in disk cap for the thumbnail cache, mirroring the
+        // PHOTO_PICK_CACHE_MAX_ROWS pattern for the feature DB. Runs after
+        // the reports are written so the current scan's (freshest-mtime)
+        // thumbs are preferentially kept and older scans' files are evicted
+        // first. Unset = unbounded (existing behaviour).
+        if let Some(dir) = &self.cfg.thumb_cache_dir {
+            if let Some(max_mb) = std::env::var("PHOTO_PICK_THUMB_DISK_MAX_MB")
+                .ok()
+                .and_then(|s| s.parse::<u64>().ok())
+            {
+                let cache =
+                    ThumbDiskCache::new(dir.clone(), DEFAULT_THUMB_LONG_EDGE, DEFAULT_THUMB_QUALITY);
+                let removed = cache.trim_to_bytes(max_mb * 1024 * 1024);
+                if removed > 0 {
+                    tracing::info!(removed, max_mb, "thumb disk cache trimmed");
+                }
+            }
+        }
+
         let report = PipelineReport {
             photo_count: photos.len(),
             cached_count,

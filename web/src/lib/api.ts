@@ -4,6 +4,7 @@ import type {
   ExecutionProvider,
   ExplanationRecord,
   ExportResult,
+  RunDiff,
   RunRecord,
   ScanRequest,
   VlmConfig,
@@ -149,6 +150,12 @@ export const api = {
   /// `<a href>` click downloads instead of navigating.
   reportJsonUrl(runId: string): string {
     return `/api/runs/${runId}/report.json`;
+  },
+
+  /// Compare this run's algorithmic keep-set against another run's, matched
+  /// across runs by content hash. 409 if either run lacks composition data.
+  async diffRuns(runId: string, otherId: string): Promise<RunDiff> {
+    return request(`/api/runs/${runId}/diff/${otherId}`);
   },
 
   /// Request cancellation of a running scan. 202 = flag set (the run winds

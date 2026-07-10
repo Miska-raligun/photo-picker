@@ -21,6 +21,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/runs/:id", get(handlers::get_run))
         .route("/api/runs/:id/events", get(handlers::run_events))
         .route("/api/runs/:id/cancel", post(handlers::cancel_run))
+        .route("/api/runs/:id/diff/:other", get(handlers::diff_runs))
         .route("/api/runs/:id/html", get(handlers::get_run_html))
         .route("/api/runs/:id/report.json", get(handlers::get_run_report_json))
         .route("/api/runs/:id/thumb/:photo_id", get(handlers::get_thumb))

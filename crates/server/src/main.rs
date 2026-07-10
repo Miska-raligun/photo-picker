@@ -4,6 +4,10 @@ use std::net::SocketAddr;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Bridge the optional config file into PHOTO_PICK_* env vars before
+    // anything reads them. Explicit env vars always win over the file.
+    photo_pick_server::config::apply_config_file();
+
     // Silence rawler's "Decoder has no preview image support" WARNs — we treat
     // them as expected (we always have an EXIF/byte-scan fallback). Override
     // by setting RUST_LOG.

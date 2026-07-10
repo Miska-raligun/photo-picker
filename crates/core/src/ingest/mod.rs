@@ -40,9 +40,11 @@ pub enum ImageFormat {
     // future: Heic
 }
 
-/// RAW format families. Only the TIFF-container ones are actually decodable in
-/// M2 (we extract the embedded full-resolution JPEG preview rather than
-/// demosaicing the raw sensor data).
+/// RAW format families. All decode through rawler's vendor-aware embedded
+/// preview extraction (three-tier fallback in `decoder.rs`); the TIFF
+/// containers additionally have a legacy EXIF/byte-scan path. CR3/RAF EXIF
+/// (timestamp/ISO/orientation) also comes from rawler — kamadak-exif can't
+/// walk their containers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RawKind {
     /// Canon CR2 (TIFF container with embedded JPEG)
@@ -57,14 +59,15 @@ pub enum RawKind {
     Pef,
     /// Olympus ORF (TIFF container)
     Orf,
-    /// Canon CR3 — ISOBMFF, not supported in M2
+    /// Canon CR3 (ISO BMFF container)
     Cr3,
-    /// Fujifilm RAF — custom container, not supported in M2
+    /// Fujifilm RAF (proprietary container)
     Raf,
 }
 
 impl RawKind {
-    /// Whether M2's TIFF-embedded-preview extractor can handle this format.
+    /// Whether the legacy EXIF-walk / byte-scan preview path (decode tier 2)
+    /// can apply. CR3/RAF skip straight from rawler preview to demosaic.
     pub fn is_tiff_container(self) -> bool {
         matches!(self, Self::Cr2 | Self::Nef | Self::Arw | Self::Dng | Self::Pef | Self::Orf)
     }

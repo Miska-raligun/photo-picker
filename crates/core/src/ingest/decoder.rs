@@ -19,10 +19,10 @@ impl Default for ThumbnailSpec {
 
 /// Decode any supported file to a downscaled thumbnail.
 ///
-/// For RAW formats stored in TIFF containers (CR2/NEF/ARW/DNG/PEF/ORF) we
-/// extract the embedded full-resolution JPEG preview — much faster than
-/// demosaicing, and sufficient for culling decisions. CR3/RAF use proprietary
-/// containers and aren't supported in M2.
+/// For RAW formats we extract the embedded full-resolution JPEG preview —
+/// much faster than demosaicing, and sufficient for culling decisions.
+/// rawler's vendor-aware extractors handle both TIFF containers
+/// (CR2/NEF/ARW/DNG/PEF/ORF) and proprietary ones (CR3's ISO BMFF, RAF).
 pub fn decode_thumbnail(path: &Path, spec: ThumbnailSpec) -> Result<DynamicImage> {
     decode_thumbnail_with_format(path, classify_or_jpeg(path), spec)
 }

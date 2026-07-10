@@ -7,6 +7,7 @@ import {
   ChevronsLeft,
   ChevronsRight,
   ExternalLink,
+  Flag as FlagIcon,
   Info,
   Minus,
   Plus,
@@ -81,6 +82,10 @@ interface Props {
   /// uses; called without arguments because the lightbox already knows the
   /// "current photo" via the parent's lightbox-index state.
   onToggleVerdict?: () => void;
+  /// The user's flag/note for the current photo. Shown + editable in the
+  /// details panel when `onSetTag` is provided.
+  tag?: { flag?: boolean; note?: string } | null;
+  onSetTag?: (tag: { flag?: boolean; note?: string }) => void;
 }
 
 const ZOOM_MIN = 1;
@@ -124,6 +129,8 @@ export function Lightbox({
   details,
   inPlace,
   onToggleVerdict,
+  tag,
+  onSetTag,
 }: Props) {
   const m = useM();
   const [loaded, setLoaded] = useState(false);
@@ -529,6 +536,8 @@ export function Lightbox({
             <DetailsPanel
               details={details}
               filename={filename}
+              tag={tag}
+              onSetTag={onSetTag}
               onClose={() => setShowDetails(false)}
             />
           )}
@@ -548,13 +557,25 @@ export function Lightbox({
 function DetailsPanel({
   details,
   filename,
+  tag,
+  onSetTag,
   onClose,
 }: {
   details: LightboxDetails;
   filename: string | null;
+  tag?: { flag?: boolean; note?: string } | null;
+  onSetTag?: (tag: { flag?: boolean; note?: string }) => void;
   onClose: () => void;
 }) {
   const m = useM();
+  // Local draft so typing doesn't round-trip through the parent (and its
+  // debounced localStorage write) on every keystroke; committed on blur.
+  const [noteDraft, setNoteDraft] = useState(tag?.note ?? "");
+  useEffect(() => {
+    setNoteDraft(tag?.note ?? "");
+    // Re-sync when the photo under the panel changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filename]);
   const fs = details.finalScore;
   const weights = SCENE_WEIGHTS[fs.scene] ?? SCENE_WEIGHTS.mixed;
   const components = [
@@ -673,6 +694,38 @@ function DetailsPanel({
             <p className="text-xs leading-relaxed text-white/85 whitespace-pre-wrap">
               {details.aiReason}
             </p>
+          </div>
+        )}
+
+        {/* User flag + note — only when the caller can persist them. */}
+        {onSetTag && (
+          <div className="space-y-2 pt-2 border-t border-white/10">
+            <button
+              type="button"
+              onClick={() => onSetTag({ ...tag, flag: !tag?.flag })}
+              aria-pressed={!!tag?.flag}
+              className={cn(
+                "inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium transition-colors",
+                tag?.flag
+                  ? "bg-amber-500/90 text-white"
+                  : "bg-white/10 text-white/70 hover:bg-white/20"
+              )}
+            >
+              <FlagIcon className={cn("h-3.5 w-3.5", tag?.flag && "fill-current")} />
+              {tag?.flag ? m.detail.flagged : m.detail.flag}
+            </button>
+            <textarea
+              value={noteDraft}
+              onChange={(e) => setNoteDraft(e.target.value)}
+              onBlur={() => {
+                if ((tag?.note ?? "") !== noteDraft) {
+                  onSetTag({ ...tag, note: noteDraft });
+                }
+              }}
+              placeholder={m.detail.notePlaceholder}
+              rows={3}
+              className="w-full rounded-md bg-white/5 border border-white/10 px-2.5 py-1.5 text-xs text-white/90 placeholder:text-white/35 focus:outline-none focus:ring-1 focus:ring-white/30 resize-y"
+            />
           </div>
         )}
       </div>

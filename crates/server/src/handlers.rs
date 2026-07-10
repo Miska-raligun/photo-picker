@@ -741,6 +741,85 @@ pub async fn get_run(
     Json(resp).into_response()
 }
 
+/// Compare two runs' algorithmic keep-sets, matching photos across runs by
+/// content hash (photo ids are per-run). Answers "what did this scan keep
+/// that the other didn't?" — the "did my parameter change help" workflow.
+/// User verdict overrides live in the browser and are NOT folded in here.
+pub async fn diff_runs(
+    State(state): State<AppState>,
+    Path((run_id, other_id)): Path<(String, String)>,
+) -> impl IntoResponse {
+    state.ensure_rehydrated(&run_id).await;
+    state.ensure_rehydrated(&other_id).await;
+    let guard = state.runs.lock().await;
+    let (Some(a), Some(b)) = (guard.get(&run_id), guard.get(&other_id)) else {
+        return (StatusCode::NOT_FOUND, "run not found").into_response();
+    };
+    if a.composition_picks.is_empty() || b.composition_picks.is_empty() {
+        return (
+            StatusCode::CONFLICT,
+            "both runs need composition data (completed scans with CLIP enabled)",
+        )
+            .into_response();
+    }
+
+    // sha256_short → (photo_id, filename) for the algorithm's kept set.
+    let kept_by_sha = |rec: &RunRecord| -> HashMap<[u8; 16], (String, Option<String>)> {
+        let mut out = HashMap::new();
+        for cp in &rec.composition_picks {
+            for (pid, _) in &cp.kept {
+                if let Some(p) = rec.photos.get(pid) {
+                    let name = p.path.file_name().map(|n| n.to_string_lossy().to_string());
+                    out.insert(p.sha256_short, (pid.0.to_string(), name));
+                }
+            }
+        }
+        out
+    };
+    let all_shas = |rec: &RunRecord| -> std::collections::HashSet<[u8; 16]> {
+        rec.photos.values().map(|p| p.sha256_short).collect()
+    };
+
+    let kept_a = kept_by_sha(a);
+    let kept_b = kept_by_sha(b);
+    let shas_a = all_shas(a);
+    let shas_b = all_shas(b);
+
+    let entry = |run: &str, id: &String, name: &Option<String>, in_other: bool| {
+        serde_json::json!({
+            "run_id": run,
+            "photo_id": id,
+            "filename": name,
+            // false ⇒ the photo isn't in the other run at all (new/removed
+            // file), true ⇒ same content, different verdict.
+            "present_in_other": in_other,
+        })
+    };
+    // Kept here but not kept there.
+    let added: Vec<_> = kept_a
+        .iter()
+        .filter(|(sha, _)| !kept_b.contains_key(*sha))
+        .map(|(sha, (id, name))| entry(&run_id, id, name, shas_b.contains(sha)))
+        .collect();
+    let removed: Vec<_> = kept_b
+        .iter()
+        .filter(|(sha, _)| !kept_a.contains_key(*sha))
+        .map(|(sha, (id, name))| entry(&other_id, id, name, shas_a.contains(sha)))
+        .collect();
+
+    Json(serde_json::json!({
+        "run_id": run_id,
+        "other_id": other_id,
+        "kept_here": kept_a.len(),
+        "kept_there": kept_b.len(),
+        "added_kept": added,
+        "removed_kept": removed,
+        "photos_only_here": shas_a.difference(&shas_b).count(),
+        "photos_only_there": shas_b.difference(&shas_a).count(),
+    }))
+    .into_response()
+}
+
 fn photo_view(
     rec: &RunRecord,
     pid: &photo_pick_core::ingest::PhotoId,

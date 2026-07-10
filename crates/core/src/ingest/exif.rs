@@ -28,23 +28,82 @@ pub fn extract_exif_info(path: &Path) -> Result<ExifInfo, exif::Error> {
     Ok(ExifInfo { captured_at, burst_id, drive_mode, iso, exposure_bias_ev })
 }
 
+/// Fallback for RAW containers kamadak-exif can't walk — CR3 is ISO BMFF,
+/// RAF has a proprietary header, so `read_from_container` errors on both and
+/// their photos would land with no timestamp (breaking Stage A time
+/// clustering: every CR3 becomes a singleton group). rawler's per-vendor
+/// metadata decoders read the same fields from anything rawler can open.
+pub fn extract_exif_info_via_rawler(path: &Path) -> Option<ExifInfo> {
+    let meta = rawler_metadata(path)?;
+    let exif = &meta.exif;
+    let captured_at = exif
+        .date_time_original
+        .as_deref()
+        .or(exif.create_date.as_deref())
+        .and_then(parse_exif_datetime_string);
+    let iso = exif
+        .iso_speed
+        .or_else(|| exif.iso_speed_ratings.map(u32::from));
+    let exposure_bias_ev = exif
+        .exposure_bias
+        .filter(|r| r.d != 0)
+        .map(|r| r.n as f32 / r.d as f32);
+    Some(ExifInfo {
+        captured_at,
+        burst_id: None,
+        drive_mode: None,
+        iso,
+        exposure_bias_ev,
+    })
+}
+
+fn rawler_metadata(path: &Path) -> Option<rawler::decoders::RawMetadata> {
+    let source = rawler::rawsource::RawSource::new(path).ok()?;
+    let decoder = rawler::get_decoder(&source).ok()?;
+    decoder
+        .raw_metadata(&source, &rawler::decoders::RawDecodeParams::default())
+        .ok()
+}
+
+/// Parse the EXIF-standard "YYYY:MM:DD HH:MM:SS" datetime string rawler
+/// hands back verbatim from the file.
+fn parse_exif_datetime_string(s: &str) -> Option<DateTime<Utc>> {
+    NaiveDateTime::parse_from_str(s.trim(), "%Y:%m:%d %H:%M:%S")
+        .ok()
+        .map(|n| n.and_utc())
+}
+
 /// EXIF orientation (1–8) from the primary IFD; defaults to 1 (no transform)
 /// when absent or unreadable. Read at decode time so portrait-orientation shots
 /// are uprighted before scoring/face detection/display (the `image` crate does
 /// not auto-apply orientation on decode).
+///
+/// RAW containers kamadak can't walk (CR3/RAF) fall back to rawler's
+/// metadata decoder — otherwise portrait CR3s would render sideways.
 pub fn read_orientation(path: &Path) -> u16 {
     use exif::{In, Tag, Value};
-    let Ok(file) = File::open(path) else {
-        return 1;
-    };
-    let mut reader = BufReader::new(file);
-    let Ok(data) = exif::Reader::new().read_from_container(&mut reader) else {
-        return 1;
-    };
-    match data.get_field(Tag::Orientation, In::PRIMARY).map(|f| &f.value) {
-        Some(Value::Short(v)) => v.first().copied().filter(|o| (1..=8).contains(o)).unwrap_or(1),
-        _ => 1,
+    let via_kamadak = (|| {
+        let file = File::open(path).ok()?;
+        let mut reader = BufReader::new(file);
+        let data = exif::Reader::new().read_from_container(&mut reader).ok()?;
+        match data.get_field(Tag::Orientation, In::PRIMARY).map(|f| &f.value) {
+            Some(Value::Short(v)) => v.first().copied().filter(|o| (1..=8).contains(o)),
+            _ => None,
+        }
+    })();
+    if let Some(o) = via_kamadak {
+        return o;
     }
+    // Only pay a rawler open for files that are actually RAW.
+    if matches!(super::classify_extension(path), Some(super::ImageFormat::Raw(_))) {
+        if let Some(o) = rawler_metadata(path)
+            .and_then(|m| m.exif.orientation)
+            .filter(|o| (1..=8).contains(o))
+        {
+            return o;
+        }
+    }
+    1
 }
 
 fn read_iso(data: &exif::Exif) -> Option<u32> {

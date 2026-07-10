@@ -20,6 +20,8 @@ import {
   saveOverrides,
 } from "./lib/overridesStore";
 import { fireScanCompleteNotification } from "./lib/notifyStore";
+import { loadTags, removeTags, saveTags } from "./lib/tagsStore";
+import type { PhotoTag } from "./lib/types";
 import { loadVlmSettings } from "./lib/vlmStore";
 
 export default function App() {
@@ -49,6 +51,9 @@ export default function App() {
   const [runs, setRuns] = useState<RunRecord[]>([]);
   const [progress, setProgress] = useState<Map<string, RunProgress>>(new Map());
   const [overrides, setOverrides] = useState<Map<string, Set<string>>>(new Map());
+  // User flags/notes per photo, keyed by run — same lazy-hydrate +
+  // debounced-persist lifecycle as `overrides`.
+  const [tags, setTags] = useState<Map<string, Map<string, PhotoTag>>>(new Map());
   const [detailRunId, setDetailRunId] = useState<string | null>(null);
   const [groupRun, setGroupRun] = useState<string | null>(null);
   const [groupIdx, setGroupIdx] = useState<number | null>(null);
@@ -261,6 +266,33 @@ export default function App() {
     return persisted;
   }
 
+  function getTags(runId: string): Map<string, PhotoTag> {
+    const inMem = tags.get(runId);
+    if (inMem) return inMem;
+    const persisted = loadTags(runId);
+    if (persisted.size > 0) {
+      setTags((prev) => {
+        if (prev.has(runId)) return prev;
+        const next = new Map(prev);
+        next.set(runId, persisted);
+        return next;
+      });
+    }
+    return persisted;
+  }
+
+  function setPhotoTag(runId: string, photoId: string, tag: PhotoTag) {
+    setTags((prev) => {
+      const next = new Map(prev);
+      const m = new Map(next.get(runId) ?? loadTags(runId));
+      if (tag.flag || tag.note?.trim()) m.set(photoId, tag);
+      else m.delete(photoId);
+      next.set(runId, m);
+      saveTags(runId, m);
+      return next;
+    });
+  }
+
   function toggleOverride(runId: string, photoId: string) {
     setOverrides((prev) => {
       const next = new Map(prev);
@@ -394,6 +426,9 @@ export default function App() {
             open={detailRunId !== null}
             onOpenChange={(v) => !v && setDetailRunId(null)}
             run={detailRun}
+            otherRuns={runs.filter(
+              (r) => r.id !== detailRunId && r.status.state === "completed"
+            )}
             overrides={detailRunId ? getOverrides(detailRunId) : new Set()}
             onOpenGroup={(idx) => {
               setGroupRun(detailRunId);
@@ -423,6 +458,22 @@ export default function App() {
                   return next;
                 });
                 removeOverrides(detailRunId, deletedIds);
+                // Tags on deleted photos are equally stale — same selective
+                // cleanup, keeping tags on failed/skipped files.
+                setTags((prev) => {
+                  const cur = prev.get(detailRunId);
+                  if (!cur || cur.size === 0) return prev;
+                  let touched = false;
+                  const nextMap = new Map(cur);
+                  for (const id of deletedIds) {
+                    if (nextMap.delete(id)) touched = true;
+                  }
+                  if (!touched) return prev;
+                  const next = new Map(prev);
+                  next.set(detailRunId, nextMap);
+                  return next;
+                });
+                removeTags(detailRunId, deletedIds);
               }
               subscribeProgress(detailRunId);
             }}
@@ -443,6 +494,8 @@ export default function App() {
             groupCount={groupCount}
             onNavigate={navigateGroup}
             overrides={groupRun ? getOverrides(groupRun) : new Set()}
+            tags={groupRun ? getTags(groupRun) : new Map()}
+            onSetTag={(photoId, tag) => groupRun && setPhotoTag(groupRun, photoId, tag)}
             inPlace={groupRunRecord?.in_place ?? false}
             vlmSettings={vlmSettings}
             onOpenSettings={() => setSettingsOpen(true)}

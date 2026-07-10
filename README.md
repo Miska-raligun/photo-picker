@@ -113,12 +113,32 @@ Optional environment variables:
 | Var | Purpose |
 |---|---|
 | `PHOTO_PICK_BIND` | bind address, default `127.0.0.1:7777` |
+| `PHOTO_PICK_BROWSE_ROOTS` | path-list (`:`/`;`-separated) the browse/scan/reveal endpoints may touch; default home + media mounts |
+| `PHOTO_PICK_SCAN_CONCURRENCY` | max concurrent scan pipelines, default 2 |
+| `PHOTO_PICK_IMAGE_DECODE_CONCURRENCY` | max concurrent thumb/preview decodes, default CPU count |
+| `PHOTO_PICK_THUMB_CACHE_MB` | in-memory rendered-JPEG cache size, default 256 |
+| `PHOTO_PICK_THUMB_DISK_MAX_MB` | cap the on-disk `.thumbs/` cache; trimmed LRU after each scan (unset = unbounded) |
+| `PHOTO_PICK_MAX_RUNS` | in-memory run history cap, default 50 |
+| `PHOTO_PICK_CACHE_MAX_ROWS` | LRU-trim the feature cache DB to N rows at scan start (unset = unbounded) |
+| `PHOTO_PICK_CONFIG` | explicit path to a TOML config file (see below) |
 | `OPENAI_API_KEY` | key for the OpenAI-compatible VLM provider |
 | `OPENAI_BASE_URL` | full chat-completions endpoint, default OpenAI |
 | `OPENAI_MODEL` | model id, default `gpt-4o` |
 | `ANTHROPIC_API_KEY` | key for Anthropic Messages API |
 | `ANTHROPIC_MODEL` | default `claude-opus-4-7` |
 | `RUST_LOG` | tracing filter, e.g. `info,photo_pick_core=debug` |
+
+Instead of exporting env vars you can keep server settings in a TOML file —
+`./photo-pick.toml` next to where you launch, or
+`<OS config dir>/photo-pick/config.toml`, or an explicit `PHOTO_PICK_CONFIG`
+path. Keys are the env var names minus the `PHOTO_PICK_` prefix, lowercase;
+explicitly-set env vars always win over the file:
+
+```toml
+bind = "127.0.0.1:7777"
+browse_roots = "/home/me/Photos:/mnt/nas"
+thumb_disk_max_mb = 1024
+```
 
 You can also configure the VLM per-browser via the in-app Settings dialog
 (gear icon top-right). Configuration there is saved to localStorage and
