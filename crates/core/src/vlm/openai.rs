@@ -156,7 +156,14 @@ impl VlmProvider for OpenAiProvider {
         let parsed: ChatResponse = resp
             .body_mut()
             .read_json()
-            .map_err(|e| Error::Config(format!("openai response parse: {e}")))?;
+            .map_err(|e| {
+                // serde errors can quote a fragment of the body — scrub it
+                // like every other provider error path in this file.
+                Error::Config(format!(
+                    "openai response parse: {}",
+                    super::redact_secrets(&e.to_string())
+                ))
+            })?;
 
         parsed
             .choices
