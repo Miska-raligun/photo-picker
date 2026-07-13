@@ -78,6 +78,9 @@ export interface ScanRequest {
   // The Rust side reads `min_dt` / `max_dt` as f32 seconds; the form passes them.
   stage_a_clip_threshold?: number;
   stage_b_threshold?: number;
+  /// Stage B structural gate — max dHash Hamming distance (0-64) for two
+  /// photos to merge on top of the CLIP check. 0 disables the gate.
+  stage_b_structural_max?: number;
   enable_clip?: boolean;
   enable_face?: boolean;
   in_place?: boolean;

@@ -68,6 +68,8 @@ export function TaskConfigDialog({
   const [hashDist, setHashDist] = useState(6);
   const [stageAClip, setStageAClip] = useState(initial.stage_a_clip_threshold);
   const [stageBClip, setStageBClip] = useState(initial.stage_b_threshold);
+  // dHash structural gate on Stage B merges. 0 = off (CLIP-only, legacy).
+  const [stageBStructuralMax, setStageBStructuralMax] = useState(16);
   const [enableClip, setEnableClip] = useState(initial.enable_clip);
   const [enableFace, setEnableFace] = useState(initial.enable_face);
   const [adaptiveThresholds, setAdaptiveThresholds] = useState(initial.adaptive_thresholds);
@@ -147,6 +149,7 @@ export function TaskConfigDialog({
         hash_dist: hashDist,
         stage_a_clip_threshold: stageAClip,
         stage_b_threshold: stageBClip,
+        stage_b_structural_max: stageBStructuralMax,
         enable_clip: enableClip,
         enable_face: enableFace,
         adaptive_thresholds: adaptiveThresholds,
@@ -346,6 +349,19 @@ export function TaskConfigDialog({
                         min={0.7}
                         max={1}
                         step={0.01}
+                      />
+                    </FieldHelp>
+
+                    <FieldHelp
+                      label={m.scanForm.stageBStructuralLabel}
+                      desc={m.scanForm.stageBStructuralDesc}
+                    >
+                      <SliderInput
+                        value={stageBStructuralMax}
+                        onChange={(v) => setStageBStructuralMax(Math.round(v))}
+                        min={0}
+                        max={64}
+                        step={1}
                       />
                     </FieldHelp>
 

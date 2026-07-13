@@ -103,6 +103,14 @@ struct ScanArgs {
     #[arg(long, default_value_t = 0.93)]
     stage_b_threshold: f32,
 
+    /// Stage B structural gate: max dHash Hamming distance (0-64) for two
+    /// photos to merge, on top of the CLIP check. CLIP sees semantics, not
+    /// layout — same-palette shots with different framing pass the cosine
+    /// bar; the gradient-hash gate keeps them apart. 0 disables the gate
+    /// (CLIP-only merging). Lower → stricter composition separation.
+    #[arg(long, default_value_t = 16)]
+    stage_b_structural_max: u32,
+
     /// Skip loading CLIP entirely. Disables Stage B composition grouping and
     /// falls back to pHash for the Stage A duplicate check (see --hash-dist).
     /// Useful on machines without an onnxruntime build.
@@ -250,6 +258,10 @@ fn run_scan(args: ScanArgs) -> Result<()> {
     cfg.stage_b = StageBParams {
         similarity_threshold: args.stage_b_threshold,
         chain_margin: StageBParams::default().chain_margin,
+        structural_max_dist: match args.stage_b_structural_max {
+            0 => None,
+            d => Some(d.min(64)),
+        },
     };
     cfg.k1 = args.k1;
     cfg.k2 = normalize_k2(args.k2);
