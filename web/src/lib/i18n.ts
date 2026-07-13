@@ -83,6 +83,10 @@ const enMessages = {
       stageBClipDesc:
         "After Stage A picks, photos are re-grouped by visual composition (same scene / framing). Lower → more shots merged as the same composition. 0.93 is a balanced default.",
 
+      stageBStructuralLabel: "Composition structure gate (dHash bits)",
+      stageBStructuralDesc:
+        "Extra check on top of the similarity threshold: two photos only merge when their gradient-hash layouts differ by at most this many bits (0–64). Catches \"same colors, different framing\" shots the vision model lumps together. Lower → stricter separation; 16 is a balanced default; 0 turns the gate off.",
+
       minDtLabel: "Min burst gap (seconds)",
       minDtDesc:
         "Lower bound for the burst-merge time window. Two adjacent photos closer than this still need to pass similarity. Defaults to 0.3s — useful for fast 20+ fps bursts.",
@@ -404,6 +408,10 @@ export const messages: Record<Lang, Messages> = {
 
       stageBClipLabel: "构图相似度阈值",
       stageBClipDesc: "Stage A 选出来的照片再按视觉构图分组。调低 → 更多照片被视为同一构图；0.93 是平衡值。",
+
+      stageBStructuralLabel: "构图结构门槛（dHash 位数）",
+      stageBStructuralDesc:
+        "在相似度阈值之上的附加检查：两张照片的梯度哈希布局差异不超过这个位数（0–64）才会合并。专治\"颜色差不多但构图差很多\"被视觉模型归为一组的问题。调低 → 分组更严格；16 是平衡默认值；0 关闭此检查。",
 
       minDtLabel: "连拍时间窗最小值（秒）",
       minDtDesc: "连拍合并时间窗的下限。相邻两张比这更近的仍需通过相似度判定。默认 0.3 秒，高速连拍（20+ fps）可调小。",

@@ -425,6 +425,7 @@ impl Pipeline {
                 similarity_threshold: (self.cfg.stage_b.similarity_threshold + bias)
                     .clamp(0.7, 0.99),
                 chain_margin: self.cfg.stage_b.chain_margin,
+                structural_max_dist: self.cfg.stage_b.structural_max_dist,
             };
             (sa, sb)
         } else {
@@ -454,13 +455,13 @@ impl Pipeline {
         // 5. Stage B clustering on K1-kept photos (if CLIP available)
         let stage_b_groups: Vec<CompositionGroup> = if clip_enabled {
             progress.on_stage(Stage::StageB, 0);
-            let kept_with_embeds: Vec<(PhotoId, Vec<f32>)> = stage_a_picks
+            let kept_with_embeds: Vec<(PhotoId, Vec<f32>, u64)> = stage_a_picks
                 .iter()
                 .flat_map(|s| s.kept.iter().map(|(pid, _)| *pid))
                 .filter_map(|pid| {
                     features
                         .get(&pid)
-                        .and_then(|f| f.clip_embed.clone().map(|e| (pid, e)))
+                        .and_then(|f| f.clip_embed.clone().map(|e| (pid, e, f.dhash)))
                 })
                 .collect();
             let bg = cluster_stage_b(&kept_with_embeds, &stage_b_params);

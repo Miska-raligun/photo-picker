@@ -1,4 +1,5 @@
 use super::{cosine_normalized, unionfind::UnionFind, GroupId};
+use crate::features::hash::hamming;
 use crate::ingest::PhotoId;
 use ndarray::Array2;
 use serde::{Deserialize, Serialize};
@@ -15,6 +16,24 @@ pub struct StageBParams {
     /// Prevents the classic A~B~C~D chain where A·D is well below threshold
     /// yet still ends up in the same group because of intermediate links.
     pub chain_margin: f32,
+    /// Structural gate: max dHash Hamming distance (0–64) for two photos to
+    /// merge, applied ON TOP of the CLIP check. CLIP embeddings encode
+    /// semantics and are weak on spatial layout — two shots with the same
+    /// palette/subject but different framing sail past the cosine threshold.
+    /// dHash encodes the 8×8 luminance-gradient layout (composition
+    /// structure), so requiring both signals keeps "same scene, recomposed"
+    /// shots in separate groups. `None` disables the gate (pre-0.6.x
+    /// behaviour).
+    pub structural_max_dist: Option<u32>,
+}
+
+impl StageBParams {
+    /// Default dHash gate. Empirically: re-shots of the *same* composition
+    /// (tripod, small hand jitter) land ≤ 10–14 bits apart; a recomposed
+    /// frame of the same scene typically lands ≥ 20. 16 splits the gap while
+    /// erring toward "keep them together" (a false split costs one extra
+    /// group; a false merge silently discards a distinct composition at K2).
+    pub const DEFAULT_STRUCTURAL_MAX_DIST: u32 = 16;
 }
 
 impl Default for StageBParams {
@@ -22,6 +41,7 @@ impl Default for StageBParams {
         Self {
             similarity_threshold: 0.93,
             chain_margin: 0.05,
+            structural_max_dist: Some(Self::DEFAULT_STRUCTURAL_MAX_DIST),
         }
     }
 }
@@ -36,16 +56,20 @@ pub struct CompositionGroup {
     pub photo_ids: Vec<PhotoId>,
 }
 
-/// Two-pass agglomerative clustering on L2-normalized CLIP embeddings:
+/// Two-pass agglomerative clustering on L2-normalized CLIP embeddings, with
+/// an optional dHash structural gate on every candidate pair:
 ///   1. Single-link union-find against `similarity_threshold` (cheap candidate
-///      grouping).
+///      grouping); a pair only merges when its dHash Hamming distance is also
+///      within `structural_max_dist` (see [`StageBParams`]).
 ///   2. Centroid-distance refinement using `chain_margin` to split off outliers
 ///      that only joined via a transitive chain. Pure single-link clustering
 ///      can drag A and D into one group when A·D itself is far below the
 ///      threshold; the centroid check catches that.
 /// O(n²) over embeddings — fine for the typical n ≤ few-hundred kept photos.
+///
+/// Input tuples are `(photo id, CLIP embedding, dHash)`.
 pub fn cluster_stage_b(
-    kept_with_embeds: &[(PhotoId, Vec<f32>)],
+    kept_with_embeds: &[(PhotoId, Vec<f32>, u64)],
     params: &StageBParams,
 ) -> Vec<CompositionGroup> {
     let n = kept_with_embeds.len();
@@ -69,6 +93,16 @@ pub fn cluster_stage_b(
     let use_legacy = std::env::var_os("PHOTO_PICK_LEGACY_COSINE").is_some();
     let mode = if use_legacy || n < BATCHED_MIN_N { Mode::Scalar } else { Mode::Batched };
     for (i, j) in pairs_above_threshold(kept_with_embeds, params.similarity_threshold, mode) {
+        // Structural gate: same-composition photos have near-identical
+        // gradient layouts. A pair that clears the semantic (CLIP) bar but
+        // whose dHashes disagree structurally is "same scene, different
+        // framing" — exactly what should NOT merge.
+        if let Some(max_d) = params.structural_max_dist {
+            let (da, db) = (kept_with_embeds[i].2, kept_with_embeds[j].2);
+            if hamming(da, db) > max_d {
+                continue;
+            }
+        }
         uf.union(i, j);
     }
 
@@ -147,7 +181,7 @@ enum Mode {
 /// `PHOTO_PICK_LEGACY_COSINE=1` selects the scalar path to reproduce
 /// pre-batching results.
 fn pairs_above_threshold(
-    kept_with_embeds: &[(PhotoId, Vec<f32>)],
+    kept_with_embeds: &[(PhotoId, Vec<f32>, u64)],
     threshold: f32,
     mode: Mode,
 ) -> Vec<(usize, usize)> {
@@ -183,11 +217,11 @@ fn pairs_above_threshold(
 /// feed them to ndarray's matmul. The input is `Vec<(_, Vec<f32>)>` which
 /// isn't laid out contiguously — there's no zero-copy view we could hand
 /// to ndarray instead.
-fn stack_embeddings(kept_with_embeds: &[(PhotoId, Vec<f32>)]) -> Array2<f32> {
+fn stack_embeddings(kept_with_embeds: &[(PhotoId, Vec<f32>, u64)]) -> Array2<f32> {
     let n = kept_with_embeds.len();
     let dim = kept_with_embeds[0].1.len();
     let mut buf = Array2::<f32>::zeros((n, dim));
-    for (i, (_, e)) in kept_with_embeds.iter().enumerate() {
+    for (i, (_, e, _)) in kept_with_embeds.iter().enumerate() {
         // Defensive: skip rows that don't match the expected dim. Stage B
         // is called from the pipeline with uniform CLIP embeddings, so
         // this should never trip — but a misshaped input shouldn't panic.
@@ -202,7 +236,7 @@ fn stack_embeddings(kept_with_embeds: &[(PhotoId, Vec<f32>)]) -> Array2<f32> {
 }
 
 /// L2-normalized mean of the embeddings at `indices`.
-fn l2_centroid(indices: &[usize], kept_with_embeds: &[(PhotoId, Vec<f32>)]) -> Vec<f32> {
+fn l2_centroid(indices: &[usize], kept_with_embeds: &[(PhotoId, Vec<f32>, u64)]) -> Vec<f32> {
     let dim = kept_with_embeds[indices[0]].1.len();
     let mut centroid = vec![0.0_f32; dim];
     for &i in indices {
@@ -236,7 +270,7 @@ mod tests {
         let id_b = PhotoId::new();
         let e = normed(&[1.0, 0.0, 0.0]);
         let groups = cluster_stage_b(
-            &[(id_a, e.clone()), (id_b, e)],
+            &[(id_a, e.clone(), 0), (id_b, e, 0)],
             &StageBParams::default(),
         );
         assert_eq!(groups.len(), 1);
@@ -246,8 +280,8 @@ mod tests {
     fn orthogonal_embeddings_split() {
         let groups = cluster_stage_b(
             &[
-                (PhotoId::new(), normed(&[1.0, 0.0, 0.0])),
-                (PhotoId::new(), normed(&[0.0, 1.0, 0.0])),
+                (PhotoId::new(), normed(&[1.0, 0.0, 0.0]), 0),
+                (PhotoId::new(), normed(&[0.0, 1.0, 0.0]), 0),
             ],
             &StageBParams::default(),
         );
@@ -259,7 +293,7 @@ mod tests {
         let a = normed(&[1.0, 0.4, 0.0]);
         let b = normed(&[0.6, 1.0, 0.0]);
         let groups = cluster_stage_b(
-            &[(PhotoId::new(), a), (PhotoId::new(), b)],
+            &[(PhotoId::new(), a, 0), (PhotoId::new(), b, 0)],
             &StageBParams::default(),
         );
         assert_eq!(groups.len(), 2);
@@ -270,7 +304,7 @@ mod tests {
         let a = normed(&[1.0, 0.05, 0.0]);
         let b = normed(&[1.0, 0.10, 0.0]);
         let groups = cluster_stage_b(
-            &[(PhotoId::new(), a), (PhotoId::new(), b)],
+            &[(PhotoId::new(), a, 0), (PhotoId::new(), b, 0)],
             &StageBParams::default(),
         );
         assert_eq!(groups.len(), 1);
@@ -288,12 +322,16 @@ mod tests {
         let d = normed(&[0.6, 0.5, 0.5, 0.3]);
         let groups = cluster_stage_b(
             &[
-                (PhotoId::new(), a),
-                (PhotoId::new(), b),
-                (PhotoId::new(), c),
-                (PhotoId::new(), d),
+                (PhotoId::new(), a, 0),
+                (PhotoId::new(), b, 0),
+                (PhotoId::new(), c, 0),
+                (PhotoId::new(), d, 0),
             ],
-            &StageBParams { similarity_threshold: 0.93, chain_margin: 0.05 },
+            &StageBParams {
+                similarity_threshold: 0.93,
+                chain_margin: 0.05,
+                structural_max_dist: None,
+            },
         );
         // Expect at least 2 groups (chain didn't collapse).
         assert!(
@@ -311,7 +349,7 @@ mod tests {
         // float epsilon — we tolerate flips only if the similarity sits
         // exactly on the threshold, which we avoid by spacing the
         // synthetic embeddings well clear of `threshold`).
-        let mut items: Vec<(PhotoId, Vec<f32>)> = Vec::with_capacity(80);
+        let mut items: Vec<(PhotoId, Vec<f32>, u64)> = Vec::with_capacity(80);
         for k in 0..80 {
             // Three "scenes" so we exercise both >-threshold and
             // <-threshold cases.
@@ -320,7 +358,7 @@ mod tests {
             v[scene] = 1.0;
             // Tiny perturbation, deterministic from k.
             v[(scene + 1) % 8] = (k as f32) * 0.001;
-            items.push((PhotoId::new(), normed(&v)));
+            items.push((PhotoId::new(), normed(&v), 0));
         }
         let threshold = 0.9;
         let mut scalar = pairs_above_threshold(&items, threshold, Mode::Scalar);
@@ -345,13 +383,17 @@ mod tests {
         let ids: Vec<PhotoId> = (0..5).map(|_| PhotoId::new()).collect();
         let groups = cluster_stage_b(
             &[
-                (ids[0], core1),
-                (ids[1], core2),
-                (ids[2], core3),
-                (ids[3], drift1),
-                (ids[4], drift2),
+                (ids[0], core1, 0),
+                (ids[1], core2, 0),
+                (ids[2], core3, 0),
+                (ids[3], drift1, 0),
+                (ids[4], drift2, 0),
             ],
-            &StageBParams { similarity_threshold: 0.90, chain_margin: 0.05 },
+            &StageBParams {
+                similarity_threshold: 0.90,
+                chain_margin: 0.05,
+                structural_max_dist: None,
+            },
         );
         // The three tight members must stay together in one group; the two
         // drifters must not be in that group.
@@ -363,5 +405,54 @@ mod tests {
         assert!(core_group.photo_ids.contains(&ids[2]));
         assert!(!core_group.photo_ids.contains(&ids[3]));
         assert!(!core_group.photo_ids.contains(&ids[4]));
+    }
+
+    #[test]
+    fn structural_gate_splits_same_color_different_composition() {
+        // Semantically identical embeddings (CLIP can't tell them apart) but
+        // dHashes 32 bits apart — a same-palette scene shot with completely
+        // different framing. With the default gate they must NOT merge.
+        let e = normed(&[1.0, 0.0, 0.0]);
+        let groups = cluster_stage_b(
+            &[
+                (PhotoId::new(), e.clone(), 0x0000_0000_FFFF_FFFF),
+                (PhotoId::new(), e, 0xFFFF_FFFF_0000_0000),
+            ],
+            &StageBParams::default(),
+        );
+        assert_eq!(groups.len(), 2, "structurally distant pair must stay split");
+    }
+
+    #[test]
+    fn structural_gate_keeps_true_recaptures_together() {
+        // Same embedding, dHashes 4 bits apart (hand jitter) — well inside
+        // the default gate, so they merge as before.
+        let e = normed(&[1.0, 0.0, 0.0]);
+        let groups = cluster_stage_b(
+            &[
+                (PhotoId::new(), e.clone(), 0b1111),
+                (PhotoId::new(), e, 0b0000),
+            ],
+            &StageBParams::default(),
+        );
+        assert_eq!(groups.len(), 1, "4-bit dHash jitter must still merge");
+    }
+
+    #[test]
+    fn structural_gate_none_reproduces_legacy_merging() {
+        // Explicitly disabling the gate restores CLIP-only behaviour even
+        // for structurally distant pairs.
+        let e = normed(&[1.0, 0.0, 0.0]);
+        let groups = cluster_stage_b(
+            &[
+                (PhotoId::new(), e.clone(), 0x0000_0000_FFFF_FFFF),
+                (PhotoId::new(), e, 0xFFFF_FFFF_0000_0000),
+            ],
+            &StageBParams {
+                structural_max_dist: None,
+                ..StageBParams::default()
+            },
+        );
+        assert_eq!(groups.len(), 1);
     }
 }

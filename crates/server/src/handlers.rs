@@ -52,6 +52,11 @@ pub struct ScanRequest {
     pub hash_dist: u32,
     #[serde(default = "default_threshold")]
     pub stage_b_threshold: f32,
+    /// Stage B structural gate: max dHash Hamming distance (0–64) for two
+    /// photos to merge on top of the CLIP similarity check. `0` disables the
+    /// gate (CLIP-only merging, pre-0.6.x behaviour). Default 16.
+    #[serde(default = "default_stage_b_structural_max")]
+    pub stage_b_structural_max: u32,
     #[serde(default = "default_stage_a_clip")]
     pub stage_a_clip_threshold: f32,
     #[serde(default = "default_clip")]
@@ -84,6 +89,9 @@ fn default_min_dt() -> f32 { 0.3 }
 fn default_max_dt() -> f32 { 30.0 }
 fn default_hash_dist() -> u32 { 6 }
 fn default_threshold() -> f32 { 0.93 }
+fn default_stage_b_structural_max() -> u32 {
+    photo_pick_core::group::StageBParams::DEFAULT_STRUCTURAL_MAX_DIST
+}
 fn default_stage_a_clip() -> f32 { 0.95 }
 fn default_clip() -> bool { true }
 fn default_face() -> bool { true }
@@ -303,6 +311,11 @@ pub async fn scan(
         cfg.stage_b = StageBParams {
             similarity_threshold: req_for_task.stage_b_threshold,
             chain_margin: StageBParams::default().chain_margin,
+            // 0 = gate off; anything else clamps to the 64-bit hash width.
+            structural_max_dist: match req_for_task.stage_b_structural_max {
+                0 => None,
+                d => Some(d.min(64)),
+            },
         };
         cfg.k1 = req_for_task.k1;
         cfg.k2 = normalize_k2(req_for_task.k2);
