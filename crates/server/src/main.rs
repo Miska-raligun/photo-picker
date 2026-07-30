@@ -23,6 +23,14 @@ async fn main() -> Result<()> {
         .parse()?;
 
     let state = AppState::new();
+    if !addr.ip().is_loopback() && state.api_token.is_none() {
+        eprintln!("┌─────────────────────────────────────────────────────────────────┐");
+        eprintln!("│ WARNING: binding {addr} WITHOUT an access token.");
+        eprintln!("│ Anyone on the network can list your runs and DELETE your photos │");
+        eprintln!("│ via the apply endpoint. Set PHOTO_PICK_TOKEN=<secret> (env or   │");
+        eprintln!("│ photo-pick.toml `token = \"...\"`) before exposing the server.   │");
+        eprintln!("└─────────────────────────────────────────────────────────────────┘");
+    }
     // Restore the list of past runs from disk so users see their history
     // after a restart. Detail (composition_picks/photos) is lazy-loaded on
     // first access via the report.json on disk.

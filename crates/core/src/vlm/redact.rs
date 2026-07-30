@@ -24,32 +24,44 @@ pub fn redact_secrets(s: &str) -> Cow<'_, str> {
     if !looks_suspicious(s) {
         return Cow::Borrowed(s);
     }
-    let mut out = String::with_capacity(s.len());
+    let mut out: Vec<u8> = Vec::with_capacity(s.len());
     let bytes = s.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
         if let Some(skip) = match_bearer(bytes, i) {
-            out.push_str("Bearer ");
-            out.push_str(REDACTED);
+            out.extend_from_slice(b"Bearer ");
+            out.extend_from_slice(REDACTED.as_bytes());
             i += skip;
         } else if let Some(skip) = match_sk(bytes, i) {
-            out.push_str(REDACTED);
+            out.extend_from_slice(REDACTED.as_bytes());
+            i += skip;
+        } else if let Some((keep, skip)) = match_api_key_field(bytes, i) {
+            out.extend_from_slice(&bytes[i..i + keep]);
+            out.extend_from_slice(REDACTED.as_bytes());
             i += skip;
         } else {
-            // Safe: i indexes a UTF-8 boundary because we only advance by
-            // ASCII-prefix-match lengths above, or single bytes here. The
-            // bytes we copy through unchanged carry whatever encoding the
-            // input had.
-            out.push(bytes[i] as char);
+            // Copy the raw byte through: multi-byte UTF-8 sequences pass
+            // unchanged (all redaction matches are pure-ASCII runs, so we
+            // never split a codepoint). The previous `bytes[i] as char`
+            // mangled non-ASCII text into Latin-1 whenever a secret was
+            // present in the same message.
+            out.push(bytes[i]);
             i += 1;
         }
     }
-    Cow::Owned(out)
+    Cow::Owned(String::from_utf8(out).unwrap_or_else(|e| {
+        String::from_utf8_lossy(e.as_bytes()).into_owned()
+    }))
 }
 
 fn looks_suspicious(s: &str) -> bool {
     // Skip the byte scan entirely when none of the markers are present.
-    s.contains("Bearer ") || s.contains("sk-")
+    s.contains("Bearer ") || s.contains("sk-") || has_key_marker(s)
+}
+
+fn has_key_marker(s: &str) -> bool {
+    let lower = s.to_ascii_lowercase();
+    lower.contains("api-key") || lower.contains("api_key") || lower.contains("apikey")
 }
 
 /// If `bytes[i..]` starts with `Bearer <token>`, return the number of bytes
@@ -83,6 +95,37 @@ fn match_sk(bytes: &[u8], i: usize) -> Option<usize> {
         return None;
     }
     Some(token_len)
+}
+
+/// Match `api-key`/`api_key`/`apikey`/`x-api-key` (any case) followed by a
+/// separator run (`: = " '` and whitespace) and a ≥16-char token. Returns
+/// `(bytes_to_keep, total_bytes_consumed)` — the field name + separators are
+/// kept verbatim, only the token is replaced. Catches provider bodies like
+/// `{"message": "invalid x-api-key: abcd1234..."}` where the key isn't
+/// carried behind a `Bearer` or `sk-` prefix.
+fn match_api_key_field(bytes: &[u8], i: usize) -> Option<(usize, usize)> {
+    const NAMES: [&[u8]; 4] = [b"x-api-key", b"api-key", b"api_key", b"apikey"];
+    let rest = &bytes[i..];
+    let name_len = NAMES.iter().find_map(|n| {
+        (rest.len() >= n.len() && rest[..n.len()].eq_ignore_ascii_case(n)).then(|| n.len())
+    })?;
+    let mut j = name_len;
+    // Optional closing quote of a JSON field name.
+    if rest.get(j) == Some(&b'"') || rest.get(j) == Some(&b'\'') {
+        j += 1;
+    }
+    let sep_start = j;
+    while matches!(rest.get(j), Some(b':' | b'=' | b'"' | b'\'' | b' ' | b'\t')) {
+        j += 1;
+    }
+    if j == sep_start {
+        return None; // no separator ⇒ just prose mentioning "api key"
+    }
+    let token_len = token_run(&rest[j..]);
+    if token_len < 16 {
+        return None;
+    }
+    Some((j, j + token_len))
 }
 
 #[inline]
@@ -148,5 +191,32 @@ mod tests {
         // positive — "alone" gets redacted. Document the behavior.
         // Verify the rest is intact instead.
         assert!(out.contains("the word Bearer ***REDACTED***"));
+    }
+
+    #[test]
+    fn redacts_x_api_key_field_and_preserves_field_name() {
+        let s = r#"{"error": "invalid x-api-key: abcdefghij1234567890"}"#;
+        let out = redact_secrets(s);
+        assert!(out.contains("x-api-key"), "field name survives");
+        assert!(out.contains("***REDACTED***"));
+        assert!(!out.contains("abcdefghij1234567890"));
+    }
+
+    #[test]
+    fn short_tokens_after_api_key_are_left_alone() {
+        // "api key 12" style prose with a short number — not a credential.
+        let s = "api_key: short";
+        assert_eq!(redact_secrets(s), s);
+    }
+
+    #[test]
+    fn multibyte_text_survives_redaction_intact() {
+        // Regression: the old byte-as-char copy mangled UTF-8 whenever a
+        // secret appeared in the same string.
+        let s = "认证失败：Bearer sk-abc123def456ghi789jkl 请检查密钥";
+        let out = redact_secrets(s);
+        assert!(out.contains("认证失败"), "Chinese text must survive: {out}");
+        assert!(out.contains("请检查密钥"));
+        assert!(out.contains("Bearer ***REDACTED***"));
     }
 }

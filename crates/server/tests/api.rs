@@ -228,3 +228,152 @@ async fn cancel_reports_unknown_and_not_running() {
     let (status, _) = post_json(&app, &format!("/api/runs/{run_id}/cancel"), serde_json::json!({})).await;
     assert_eq!(status, StatusCode::CONFLICT);
 }
+
+#[tokio::test]
+async fn token_gate_locks_api_but_not_static_or_health() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut state = test_state(tmp.path());
+    state.api_token = Some(std::sync::Arc::from("s3cret"));
+    let app = router(state);
+
+    // API without a token → 401.
+    let resp = app.clone().oneshot(Request::get("/api/runs").body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    // Wrong token → 401.
+    let resp = app.clone().oneshot(
+        Request::get("/api/runs").header("authorization", "Bearer nope").body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    // Bearer header → 200.
+    let resp = app.clone().oneshot(
+        Request::get("/api/runs").header("authorization", "Bearer s3cret").body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    // Cookie (what <img> thumbs / EventSource rely on) → 200.
+    let resp = app.clone().oneshot(
+        Request::get("/api/runs").header("cookie", "other=1; photo_pick_token=s3cret").body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    // Query param → 200.
+    let resp = app.clone().oneshot(Request::get("/api/runs?token=s3cret").body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    // Static shell loads without a token (user needs the UI to enter it)…
+    let resp = app.clone().oneshot(Request::get("/").body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    // …and so does the health probe.
+    let resp = app.clone().oneshot(Request::get("/api/health").body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn export_writes_xmp_sidecars_with_rating_and_note() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("shoot");
+    let target = tmp.path().join("exported");
+    std::fs::create_dir_all(&root).unwrap();
+
+    let keeper = root.join("keeper.jpg");
+    let fav = root.join("fav.jpg");
+    std::fs::write(&keeper, b"k").unwrap();
+    std::fs::write(&fav, b"f").unwrap();
+    let (id_keep, p_keep) = photo_ref(keeper);
+    let (id_fav, p_fav) = photo_ref(fav);
+
+    let state = test_state(tmp.path());
+    let run_id = insert_run(&state, root, tmp.path().join("out"), vec![(id_keep, p_keep), (id_fav, p_fav)]).await;
+    let app = router(state);
+
+    let (status, json) = post_json(
+        &app,
+        &format!("/api/runs/{run_id}/export"),
+        serde_json::json!({
+            "photo_ids": [id_keep.to_string(), id_fav.to_string()],
+            "target_dir": target,
+            "link_mode": "copy",
+            "write_xmp": true,
+            "flagged_ids": [id_fav.to_string()],
+            "notes": { id_keep.to_string(): "crop tighter <later>" },
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["exported"], 2);
+    assert_eq!(json["xmp_written"], 2);
+
+    let keeper_xmp = std::fs::read_to_string(target.join("keeper.xmp")).unwrap();
+    assert!(keeper_xmp.contains(r#"xmp:Rating="4""#), "plain keeper gets rating 4");
+    assert!(keeper_xmp.contains("crop tighter &lt;later&gt;"), "note is XML-escaped");
+    let fav_xmp = std::fs::read_to_string(target.join("fav.xmp")).unwrap();
+    assert!(fav_xmp.contains(r#"xmp:Rating="5""#), "flagged photo gets rating 5");
+    assert!(!fav_xmp.contains("dc:description"), "no note ⇒ no description block");
+}
+
+#[tokio::test]
+async fn duplicates_groups_identical_content() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("shoot");
+    std::fs::create_dir_all(&root).unwrap();
+    // photo_ref gives every photo the same zeroed sha; give the third a
+    // distinct hash so it must NOT join the duplicate set.
+    let (ida, pa) = photo_ref(root.join("a.jpg"));
+    let (idb, pb) = photo_ref(root.join("copy_of_a.jpg"));
+    let (idc, mut pc) = photo_ref(root.join("unique.jpg"));
+    pc.sha256_short = [9u8; 16];
+
+    let state = test_state(tmp.path());
+    let run_id = insert_run(&state, root, tmp.path().join("out"), vec![(ida, pa), (idb, pb), (idc, pc)]).await;
+    let app = router(state);
+
+    let resp = app.clone().oneshot(
+        Request::get(&format!("/api/runs/{run_id}/duplicates")).body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["redundant_count"], 1);
+    let groups = json["groups"].as_array().unwrap();
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0]["photos"].as_array().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn similar_ranks_by_clip_cosine_from_cache() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("shoot");
+    let output = tmp.path().join("out");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&output).unwrap();
+
+    let (id_t, mut p_t) = photo_ref(root.join("target.jpg"));
+    let (id_near, mut p_near) = photo_ref(root.join("near.jpg"));
+    let (id_far, mut p_far) = photo_ref(root.join("far.jpg"));
+    p_t.sha256_short = [1u8; 16];
+    p_near.sha256_short = [2u8; 16];
+    p_far.sha256_short = [3u8; 16];
+
+    // Seed the run's feature cache with normalized embeddings.
+    let cache = photo_pick_core::cache::CacheStore::open(&output.join(".cache.db")).unwrap();
+    let mut feat = |id: PhotoId, embed: Vec<f32>| photo_pick_core::features::PhotoFeatures {
+        clip_embed: Some(embed),
+        ..photo_pick_core::features::PhotoFeatures::hashes_only(id, 0, 0)
+    };
+    cache.put(&[1u8; 16], &feat(id_t, vec![1.0, 0.0])).unwrap();
+    let inv = 1.0 / (1.0f32 + 0.04).sqrt();
+    cache.put(&[2u8; 16], &feat(id_near, vec![inv, 0.2 * inv])).unwrap();
+    cache.put(&[3u8; 16], &feat(id_far, vec![0.0, 1.0])).unwrap();
+
+    let state = test_state(tmp.path());
+    let run_id = insert_run(&state, root, output, vec![(id_t, p_t), (id_near, p_near), (id_far, p_far)]).await;
+    let app = router(state);
+
+    let resp = app.clone().oneshot(
+        Request::get(&format!("/api/runs/{run_id}/similar/{id_t}?k=5")).body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let similar = json["similar"].as_array().unwrap();
+    assert_eq!(similar.len(), 2);
+    assert_eq!(similar[0]["photo_id"], id_near.to_string(), "near vector ranks first");
+    assert!(similar[0]["similarity"].as_f64().unwrap() > similar[1]["similarity"].as_f64().unwrap());
+}

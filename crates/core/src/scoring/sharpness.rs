@@ -9,7 +9,15 @@ use image::GrayImage;
 /// [`finalize_group`]: super::finalize_group
 pub fn raw(gray: &GrayImage) -> f32 {
     let (w, h) = (gray.width(), gray.height());
-    let roi_size = (w.min(h) / 3).max(64);
+    // Clamp the ROI to the image itself: for inputs whose short edge is
+    // under 64px the previous `max(64)` produced a window larger than the
+    // image and the row indexing below walked off the buffer (index panic,
+    // not an Err). The pipeline always feeds ≥512px thumbs, but `raw` is a
+    // pub API — tiny crops must degrade, not panic.
+    let roi_size = (w.min(h) / 3).max(64).min(w).min(h);
+    if roi_size < 8 {
+        return 0.0; // too small for a meaningful gradient window
+    }
 
     let centers: [(u32, u32); 9] = [
         (w / 6, h / 6),
@@ -171,5 +179,16 @@ mod tests {
         let fine = raw(&checkerboard(256, 2));
         let coarse = raw(&checkerboard(256, 32));
         assert!(fine > coarse, "fine={} coarse={}", fine, coarse);
+    }
+
+    #[test]
+    fn tiny_images_degrade_instead_of_panicking() {
+        // Regression: short edge < 64 used to make the ROI larger than the
+        // image and index out of bounds inside the window loops.
+        for (w, h) in [(1u32, 1u32), (7, 7), (10, 40), (63, 100)] {
+            let img = GrayImage::from_pixel(w, h, image::Luma([128]));
+            let v = raw(&img); // must not panic
+            assert!(v >= 0.0);
+        }
     }
 }

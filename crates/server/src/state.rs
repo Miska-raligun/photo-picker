@@ -290,6 +290,12 @@ pub struct AppState {
     /// `Pipeline::run_with_cancel` at stage boundaries and per photo in the
     /// feature-extraction loop. Removed when the run reaches a terminal state.
     pub cancel_flags: Arc<Mutex<HashMap<String, Arc<std::sync::atomic::AtomicBool>>>>,
+    /// Bearer token required on every /api route when set (PHOTO_PICK_TOKEN).
+    /// `None` = open access — fine on localhost, dangerous on 0.0.0.0
+    /// (main.rs prints a loud warning for that combination). Run ids are
+    /// listable via /api/runs, so without this gate any LAN client could
+    /// chain list→detail→apply and delete the user's photos.
+    pub api_token: Option<Arc<str>>,
 }
 
 impl AppState {
@@ -330,6 +336,10 @@ impl AppState {
             runs_index_path,
             rehydrate_locks: Arc::new(Mutex::new(HashMap::new())),
             cancel_flags: Arc::new(Mutex::new(HashMap::new())),
+            api_token: std::env::var("PHOTO_PICK_TOKEN")
+                .ok()
+                .filter(|t| !t.is_empty())
+                .map(|t| Arc::from(t.as_str())),
         }
     }
 

@@ -21,6 +21,47 @@ pub use anthropic::AnthropicProvider;
 pub use openai::OpenAiProvider;
 pub use redact::redact_secrets;
 
+/// Send an HTTP request with one retry on transport errors and retryable
+/// statuses (429 / 5xx). VLM "explain" is a user-initiated click — a
+/// transient network blip or rate-limit hiccup shouldn't cost the user
+/// their button press. One retry only: the caller's timeout is 180s, so a
+/// second attempt already bounds worst-case latency at ~6 minutes.
+pub(crate) fn send_with_retry<F>(
+    provider: &str,
+    mut send: F,
+) -> std::result::Result<ureq::http::Response<ureq::Body>, ureq::Error>
+where
+    F: FnMut() -> std::result::Result<ureq::http::Response<ureq::Body>, ureq::Error>,
+{
+    const RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
+    match send() {
+        Ok(resp) if is_retryable_status(resp.status().as_u16()) => {
+            tracing::warn!(
+                provider,
+                status = resp.status().as_u16(),
+                "vlm retryable status; retrying once"
+            );
+            std::thread::sleep(RETRY_DELAY);
+            send()
+        }
+        Ok(resp) => Ok(resp),
+        Err(e) => {
+            tracing::warn!(
+                provider,
+                error = %redact_secrets(&e.to_string()),
+                "vlm transport error; retrying once"
+            );
+            std::thread::sleep(RETRY_DELAY);
+            send()
+        }
+    }
+}
+
+fn is_retryable_status(code: u16) -> bool {
+    code == 429 || (500..=599).contains(&code)
+}
+
+
 use crate::error::Result;
 
 /// A single image to include in a multimodal prompt.
