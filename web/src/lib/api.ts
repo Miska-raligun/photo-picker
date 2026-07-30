@@ -1,12 +1,15 @@
+import { authHeaders } from "./tokenStore";
 import type {
   ApplyResult,
   BrowseResponse,
   ExecutionProvider,
   ExplanationRecord,
+  DuplicateReport,
   ExportResult,
   RunDiff,
   RunRecord,
   ScanRequest,
+  SimilarReport,
   VlmConfig,
 } from "./types";
 
@@ -19,7 +22,12 @@ class ApiError extends Error {
 }
 
 async function request<T>(input: string, init?: RequestInit): Promise<T> {
-  const resp = await fetch(input, init);
+  // Every call carries the token when one is configured; servers started
+  // without PHOTO_PICK_TOKEN ignore the header.
+  const resp = await fetch(input, {
+    ...init,
+    headers: { ...authHeaders(), ...(init?.headers ?? {}) },
+  });
   if (!resp.ok) {
     const text = await resp.text().catch(() => resp.statusText);
     throw new ApiError(resp.status, text || resp.statusText);
@@ -101,7 +109,8 @@ export const api = {
     runId: string,
     photoIds: string[],
     targetDir: string,
-    linkMode: "copy" | "hardlink" | "symlink" = "copy"
+    linkMode: "copy" | "hardlink" | "symlink" = "copy",
+    xmp?: { flaggedIds: string[]; notes: Record<string, string> }
   ): Promise<ExportResult> {
     return request(`/api/runs/${runId}/export`, {
       method: "POST",
@@ -110,8 +119,23 @@ export const api = {
         photo_ids: photoIds,
         target_dir: targetDir,
         link_mode: linkMode,
+        write_xmp: !!xmp,
+        ...(xmp
+          ? { flagged_ids: xmp.flaggedIds, notes: xmp.notes }
+          : {}),
       }),
     });
+  },
+
+  /// Byte-identical duplicate sets in this run (grouped by content hash).
+  async duplicates(runId: string): Promise<DuplicateReport> {
+    return request(`/api/runs/${runId}/duplicates`);
+  },
+
+  /// CLIP nearest neighbours of one photo, read from the run's feature cache.
+  /// 409 when the run was scanned without CLIP (no embeddings to compare).
+  async similar(runId: string, photoId: string, k = 12): Promise<SimilarReport> {
+    return request(`/api/runs/${runId}/similar/${photoId}?k=${k}`);
   },
 
   async explain(
@@ -163,7 +187,10 @@ export const api = {
   /// run already finished; 404 = unknown id. Features extracted before the
   /// cancel stay cached, so re-running the same folder resumes from there.
   async cancelRun(runId: string): Promise<void> {
-    const resp = await fetch(`/api/runs/${runId}/cancel`, { method: "POST" });
+    const resp = await fetch(`/api/runs/${runId}/cancel`, {
+      method: "POST",
+      headers: authHeaders(),
+    });
     if (!resp.ok) {
       const text = await resp.text().catch(() => resp.statusText);
       throw new ApiError(resp.status, text || resp.statusText);
@@ -176,7 +203,9 @@ export const api = {
   /// a container, etc.). The caller decides how loud to be about errors —
   /// for the apply-toast use case a quiet `console.warn` is enough.
   async reveal(path: string): Promise<void> {
-    const resp = await fetch(`/api/reveal?path=${encodeURIComponent(path)}`);
+    const resp = await fetch(`/api/reveal?path=${encodeURIComponent(path)}`, {
+      headers: authHeaders(),
+    });
     if (!resp.ok) {
       const text = await resp.text().catch(() => resp.statusText);
       throw new ApiError(resp.status, text || resp.statusText);

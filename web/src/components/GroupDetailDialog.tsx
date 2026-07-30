@@ -1,4 +1,5 @@
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   ChevronLeft,
   ChevronRight,
@@ -27,13 +28,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { api } from "@/lib/api";
+import { CARD_WIDTH_CLASS, CARD_WIDTH_PX, loadCardSize, saveCardSize, type CardSize } from "@/lib/uiPrefs";
 import { SCENE_WEIGHTS } from "@/lib/constants";
 import { useI18n, useM } from "@/lib/i18n";
 // Button import retained for header/footer use elsewhere in the dialog.
 import type {
   CompositionPickView,
+  SimilarPhoto,
   ExplanationRecord,
   PhotoTag,
   PhotoView,
@@ -242,10 +245,28 @@ export function GroupDetailDialog({
   // be ambiguous to apply — can't accidentally form.
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const lastClickIndexRef = useRef<number | null>(null);
+  // Card width preference (global, persisted). Also feeds the virtualizer's
+  // size estimate so the two can't disagree.
+  const [cardSize, setCardSize] = useState<CardSize>(() => loadCardSize());
+  // "Find similar" results for the photo currently open in the lightbox.
+  // Cleared whenever the lightbox target changes so a stale list can't be
+  // attributed to the wrong photo.
+  const [similar, setSimilar] = useState<SimilarPhoto[] | null>(null);
+  const [similarLoading, setSimilarLoading] = useState(false);
+  const [similarError, setSimilarError] = useState<string | null>(null);
+  function changeCardSize(next: CardSize) {
+    setCardSize(next);
+    saveCardSize(next);
+  }
   useEffect(() => {
     setSelectedIds(new Set());
     lastClickIndexRef.current = null;
   }, [pickIndex]);
+
+  useEffect(() => {
+    setSimilar(null);
+    setSimilarError(null);
+  }, [lightboxIndex, pickIndex]);
 
   // Esc clears the selection without closing the dialog. Skipped while
   // typing (provider <select> etc.) so users don't lose a working set to
@@ -377,6 +398,31 @@ export function GroupDetailDialog({
     return sorted;
   }, [rawDisplayList, filterMode, sortMode, aiByPhotoId, overrides, tags]);
 
+  function findSimilar(photoId: string) {
+    if (!runId) return;
+    setSimilarLoading(true);
+    setSimilarError(null);
+    api
+      .similar(runId, photoId)
+      .then((r) => setSimilar(r.similar))
+      .catch((e) => setSimilarError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setSimilarLoading(false));
+  }
+
+  // Horizontal virtualizer over the (filtered, sorted) display list. Gap is
+  // folded into the estimate so absolute offsets line up with the CSS.
+  const stripRef = useRef<HTMLDivElement | null>(null);
+  const cardStride = CARD_WIDTH_PX[cardSize] + 16;
+  const virtualizer = useVirtualizer({
+    horizontal: true,
+    count: displayList.length,
+    getScrollElement: () => stripRef.current,
+    estimateSize: useCallback(() => cardStride, [cardStride]),
+    overscan: 4,
+    paddingStart: 24,
+    paddingEnd: 24,
+  });
+
   const total = pick ? pick.kept.length + pick.rejected.length : 0;
   // Final "will be kept" count after user flips: algo-kept minus flipped-kept,
   // plus flipped-rejected.
@@ -490,6 +536,22 @@ export function GroupDetailDialog({
                     {label}
                   </Button>
                 ))}
+                <div className="flex items-center gap-0.5 ml-2">
+                  {(["s", "m", "l"] as const).map((sz) => (
+                    <Button
+                      key={sz}
+                      variant={cardSize === sz ? "default" : "outline"}
+                      size="sm"
+                      className="h-7 w-7 p-0 text-[0.65rem] font-mono"
+                      onClick={() => changeCardSize(sz)}
+                      title={m.detail.cardSize}
+                      aria-label={`${m.detail.cardSize}: ${sz.toUpperCase()}`}
+                      aria-pressed={cardSize === sz}
+                    >
+                      {sz.toUpperCase()}
+                    </Button>
+                  ))}
+                </div>
                 {selectedIds.size > 0 && inPlace ? (
                   <div className="ml-auto flex items-center gap-1.5 px-2 py-1 rounded-md bg-sky-50 dark:bg-sky-950/30 border border-sky-200/60 dark:border-sky-800/60">
                     <span className="font-mono text-sky-900 dark:text-sky-200">
@@ -536,38 +598,53 @@ export function GroupDetailDialog({
                   </span>
                 )}
               </div>
-              <ScrollArea className="flex-1 w-full min-h-0">
-                <div className="flex gap-4 px-6 py-4 w-max">
-                  {displayList.length === 0 ? (
-                    <div className="text-sm text-muted-foreground py-6 px-2">
-                      {m.detail.filterEmpty}
-                    </div>
-                  ) : (
-                    displayList.map(({ p, kept }, i) => (
-                      <PhotoCard
-                        key={p.photo_id}
-                        runId={runId}
-                        photo={p}
-                        kept={kept}
-                        overridden={overrides.has(p.photo_id)}
-                        selected={selectedIds.has(p.photo_id)}
-                        tag={tags.get(p.photo_id)}
-                        inPlace={inPlace}
-                        aiRank={aiByPhotoId?.get(p.photo_id)?.rank}
-                        aiReason={aiByPhotoId?.get(p.photo_id)?.reason}
-                        onCardClick={(e) => handleCardClick(e, p.photo_id, i)}
-                        onToggleFlag={() => {
-                          const cur = tags.get(p.photo_id) ?? {};
-                          onSetTag(p.photo_id, { ...cur, flag: !cur.flag });
-                        }}
-                        onToggleOverride={() => onToggleOverride(p.photo_id)}
-                        onViewOriginal={() => setLightboxIndex(i)}
-                      />
-                    ))
-                  )}
+              {displayList.length === 0 ? (
+                <div className="flex-1 text-sm text-muted-foreground py-6 px-6">
+                  {m.detail.filterEmpty}
                 </div>
-                <ScrollBar orientation="horizontal" />
-              </ScrollArea>
+              ) : (
+                // Horizontally virtualized strip: a 200-photo group used to
+                // mount 200 cards (each with its own <img> + score bars),
+                // which stutters badly on low-end machines. Only the visible
+                // window plus overscan is rendered now.
+                <div ref={stripRef} className="flex-1 min-h-0 overflow-x-auto overflow-y-hidden">
+                  <div
+                    className="relative h-full py-4"
+                    style={{ width: `${virtualizer.getTotalSize()}px` }}
+                  >
+                    {virtualizer.getVirtualItems().map((v) => {
+                      const { p, kept } = displayList[v.index];
+                      return (
+                        <div
+                          key={p.photo_id}
+                          className="absolute top-0 h-full py-4"
+                          style={{ left: `${v.start}px`, width: `${v.size}px` }}
+                        >
+                          <PhotoCard
+                            runId={runId}
+                            photo={p}
+                            kept={kept}
+                            overridden={overrides.has(p.photo_id)}
+                            selected={selectedIds.has(p.photo_id)}
+                            tag={tags.get(p.photo_id)}
+                            inPlace={inPlace}
+                            widthClass={CARD_WIDTH_CLASS[cardSize]}
+                            aiRank={aiByPhotoId?.get(p.photo_id)?.rank}
+                            aiReason={aiByPhotoId?.get(p.photo_id)?.reason}
+                            onCardClick={(e) => handleCardClick(e, p.photo_id, v.index)}
+                            onToggleFlag={() => {
+                              const cur = tags.get(p.photo_id) ?? {};
+                              onSetTag(p.photo_id, { ...cur, flag: !cur.flag });
+                            }}
+                            onToggleOverride={() => onToggleOverride(p.photo_id)}
+                            onViewOriginal={() => setLightboxIndex(v.index)}
+                          />
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </>
           )}
           {!loading && (!pick || !runId) && (
@@ -750,6 +827,15 @@ export function GroupDetailDialog({
                 : undefined
             }
             tag={open && photo ? tags.get(photo.photo_id) ?? null : null}
+            similar={similar}
+            similarLoading={similarLoading}
+            similarError={similarError}
+            onFindSimilar={
+              open && photo ? () => findSimilar(photo.photo_id) : undefined
+            }
+            similarThumbUrl={
+              runId ? (pid: string) => api.thumbUrl(runId, pid) : undefined
+            }
             onSetTag={
               open && photo
                 ? (t) => onSetTag(photo.photo_id, t)
@@ -861,6 +947,8 @@ interface PhotoCardProps {
   /// Whether the card is part of the current multi-select working set.
   /// Visual-only — bulk actions live in the parent's toolbar.
   selected: boolean;
+  /// Tailwind width class from the user's card-size preference.
+  widthClass: string;
   /// The user's flag/note for this photo, if any.
   tag?: PhotoTag;
   onToggleFlag: () => void;
@@ -886,6 +974,7 @@ function PhotoCardImpl({
   kept,
   overridden,
   selected,
+  widthClass,
   tag,
   onToggleFlag,
   inPlace,
@@ -933,7 +1022,8 @@ function PhotoCardImpl({
           : undefined
       }
       className={cn(
-        "group w-80 shrink-0 rounded-lg border bg-card overflow-hidden flex flex-col transition-all",
+        "group shrink-0 rounded-lg border bg-card overflow-hidden flex flex-col transition-all",
+        widthClass,
         // Border + opacity reflect the FINAL state, not the raw algo verdict.
         willKeep && !overridden && !selected && "border-[var(--success)] border-2",
         !willKeep && !overridden && !selected && "opacity-80",

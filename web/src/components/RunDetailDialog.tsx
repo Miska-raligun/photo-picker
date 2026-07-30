@@ -13,6 +13,7 @@ import {
   Images,
   Layers,
   LayoutGrid,
+  Copy,
   Loader2,
   Upload,
   XCircle,
@@ -39,7 +40,14 @@ import { ExportDialog } from "./ExportDialog";
 import { Thumb } from "./Thumb";
 import { api } from "@/lib/api";
 import { useM } from "@/lib/i18n";
-import type { ApplyResult, RunDiff, RunDiffEntry, RunRecord } from "@/lib/types";
+import type {
+  ApplyResult,
+  DuplicateReport,
+  PhotoTag,
+  RunDiff,
+  RunDiffEntry,
+  RunRecord,
+} from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 interface Props {
@@ -50,6 +58,9 @@ interface Props {
   /// tweak keep different photos?").
   otherRuns: RunRecord[];
   overrides: Set<string>;
+  /// User flags/notes for this run — forwarded to the export dialog for
+  /// optional XMP sidecars.
+  tags: Map<string, PhotoTag>;
   onOpenGroup: (pickIndex: number) => void;
   onApplyDone: (result: ApplyResult) => void;
 }
@@ -60,6 +71,7 @@ export function RunDetailDialog({
   run,
   otherRuns,
   overrides,
+  tags,
   onOpenGroup,
   onApplyDone,
 }: Props) {
@@ -188,6 +200,8 @@ export function RunDetailDialog({
             />
           )}
 
+          {isCompleted && <DuplicatesPanel runId={run.id} />}
+
           {isCompleted && picks.length > 0 && otherRuns.length > 0 && (
             <RunCompare runId={run.id} otherRuns={otherRuns} />
           )}
@@ -253,6 +267,7 @@ export function RunDetailDialog({
         runId={run.id}
         picks={picks}
         overrides={overrides}
+        tags={tags}
       />
     </Dialog>
   );
@@ -475,6 +490,74 @@ function DiffStrip({
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+
+/// Byte-identical duplicate sets in this run. Lazy — the scan already hashed
+/// every file, but users shouldn't pay a request unless they ask.
+function DuplicatesPanel({ runId }: { runId: string }) {
+  const m = useM();
+  const [report, setReport] = useState<DuplicateReport | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function scan() {
+    setLoading(true);
+    setError(null);
+    api
+      .duplicates(runId)
+      .then(setReport)
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setLoading(false));
+  }
+
+  return (
+    <div className="rounded-lg border bg-card/50 px-4 py-3 space-y-2">
+      <div className="flex items-center gap-2 flex-wrap">
+        <Copy className="h-4 w-4 text-muted-foreground shrink-0" />
+        <span className="text-sm font-medium">{m.duplicates.title}</span>
+        <Button variant="outline" size="sm" className="h-7 text-xs" onClick={scan} disabled={loading}>
+          {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+          {report ? m.duplicates.rescan : m.duplicates.scan}
+        </Button>
+        {report && (
+          <span className="text-xs text-muted-foreground font-mono tabular-nums ml-auto">
+            {m.duplicates.summary(report.groups.length, report.redundant_count)}
+          </span>
+        )}
+      </div>
+      {error && <div className="text-xs text-muted-foreground">{error}</div>}
+      {report && report.groups.length === 0 && (
+        <div className="text-xs text-muted-foreground">{m.duplicates.none}</div>
+      )}
+      {report && report.groups.length > 0 && (
+        <div className="space-y-2 max-h-64 overflow-y-auto">
+          {report.groups.slice(0, 20).map((g, i) => (
+            <div key={i} className="flex gap-2 items-start">
+              <div className="shrink-0 w-16 h-16 rounded overflow-hidden border">
+                <Thumb
+                  src={api.thumbUrl(runId, g.photos[0].photo_id)}
+                  alt={g.photos[0].filename ?? ""}
+                />
+              </div>
+              <ul className="text-[0.7rem] font-mono text-muted-foreground min-w-0 flex-1 space-y-0.5">
+                {g.photos.map((ph) => (
+                  <li key={ph.photo_id} className="truncate" title={ph.path}>
+                    {ph.path}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+          {report.groups.length > 20 && (
+            <div className="text-xs text-muted-foreground italic">
+              … +{report.groups.length - 20}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

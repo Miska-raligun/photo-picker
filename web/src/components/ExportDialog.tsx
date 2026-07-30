@@ -20,7 +20,7 @@ import { BrowseDialog, type BrowseResult } from "./BrowseDialog";
 import { api } from "@/lib/api";
 import { useM } from "@/lib/i18n";
 import { finalKeptIds } from "@/lib/selection";
-import type { CompositionPickView } from "@/lib/types";
+import type { CompositionPickView, PhotoTag } from "@/lib/types";
 import { toast } from "sonner";
 
 interface Props {
@@ -29,17 +29,21 @@ interface Props {
   runId: string;
   picks: CompositionPickView[];
   overrides: Set<string>;
+  /// User flags/notes for this run — feed the optional XMP sidecars
+  /// (flagged ⇒ rating 5, note ⇒ dc:description).
+  tags: Map<string, PhotoTag>;
 }
 
 type LinkMode = "copy" | "hardlink" | "symlink";
 
-export function ExportDialog({ open, onOpenChange, runId, picks, overrides }: Props) {
+export function ExportDialog({ open, onOpenChange, runId, picks, overrides, tags }: Props) {
   const m = useM();
   const keptIds = finalKeptIds(picks, overrides);
   const [target, setTarget] = useState<string | null>(null);
   const [linkMode, setLinkMode] = useState<LinkMode>("copy");
   const [browseOpen, setBrowseOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [writeXmp, setWriteXmp] = useState(false);
 
   function handleBrowse(result: BrowseResult) {
     if (result.kind === "folder") setTarget(result.path);
@@ -49,8 +53,22 @@ export function ExportDialog({ open, onOpenChange, runId, picks, overrides }: Pr
     if (!target || keptIds.length === 0) return;
     setSubmitting(true);
     try {
-      const r = await api.export(runId, keptIds, target, linkMode);
-      const msg = `${r.exported} / ${r.requested} ${m.export.toastDone}`;
+      // Only send tag data when sidecars are requested — keeps the request
+      // small and makes the server-side branch unambiguous.
+      const xmp = writeXmp
+        ? {
+            flaggedIds: keptIds.filter((id) => tags.get(id)?.flag),
+            notes: Object.fromEntries(
+              keptIds
+                .map((id) => [id, tags.get(id)?.note?.trim() ?? ""] as const)
+                .filter(([, note]) => note.length > 0)
+            ),
+          }
+        : undefined;
+      const r = await api.export(runId, keptIds, target, linkMode, xmp);
+      const msg = `${r.exported} / ${r.requested} ${m.export.toastDone}${
+        r.xmp_written > 0 ? ` · ${r.xmp_written} XMP` : ""
+      }`;
       if (r.failed.length === 0) {
         toast.success(msg, { description: r.target_dir });
       } else {
@@ -102,7 +120,22 @@ export function ExportDialog({ open, onOpenChange, runId, picks, overrides }: Pr
               </Button>
             </div>
 
+            <label className="flex items-start gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={writeXmp}
+                onChange={(e) => setWriteXmp(e.target.checked)}
+                className="mt-0.5 accent-primary"
+              />
+              <div className="text-sm">
+                <div className="font-medium">{m.export.writeXmp}</div>
+                <div className="text-xs text-muted-foreground">
+                  {m.export.writeXmpDesc}
+                </div>
+              </div>
+            </label>
             <div className="grid gap-1.5">
+
               <label className="text-xs font-medium text-muted-foreground">
                 {m.export.linkMode}
               </label>

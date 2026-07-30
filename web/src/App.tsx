@@ -20,6 +20,8 @@ import {
   saveOverrides,
 } from "./lib/overridesStore";
 import { fireScanCompleteNotification } from "./lib/notifyStore";
+import { syncTokenCookie } from "./lib/tokenStore";
+import { ShortcutsDialog, useShortcutsHotkey } from "./components/ShortcutsDialog";
 import { loadTags, removeTags, saveTags } from "./lib/tagsStore";
 import type { PhotoTag } from "./lib/types";
 import { loadVlmSettings } from "./lib/vlmStore";
@@ -40,6 +42,7 @@ export default function App() {
     loadVlmSettings()
   );
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [version, setVersion] = useState<string | null>(null);
   // SSE health. We light up the banner the first time a stream errors
   // without a prior `done` event (i.e. probably a network blip rather
@@ -203,6 +206,14 @@ export default function App() {
       sseRef.current.clear();
     };
   }, []);
+
+  // Mirror the stored token into a cookie so header-less requests (<img>
+  // thumbs, EventSource) authenticate too. Runs before the first fetch.
+  useEffect(() => {
+    syncTokenCookie();
+  }, []);
+
+  useShortcutsHotkey(useCallback(() => setShortcutsOpen(true), []));
 
   // Fetch server version once. Best-effort — old servers without /api/info
   // won't surface anything.
@@ -430,6 +441,7 @@ export default function App() {
               (r) => r.id !== detailRunId && r.status.state === "completed"
             )}
             overrides={detailRunId ? getOverrides(detailRunId) : new Set()}
+            tags={detailRunId ? getTags(detailRunId) : new Map()}
             onOpenGroup={(idx) => {
               setGroupRun(detailRunId);
               setGroupIdx(idx);
@@ -511,6 +523,8 @@ export default function App() {
           initial={vlmSettings}
           onChange={setVlmSettings}
         />
+
+        <ShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
 
         <Toaster richColors closeButton position="bottom-right" />
       </div>

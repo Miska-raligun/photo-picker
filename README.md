@@ -53,14 +53,18 @@ except the explicit VLM calls you trigger with your own key.
   sonner + lucide-react
 - **Cache**: SQLite (rusqlite, bundled)
 - **Trash**: `trash` crate (cross-platform OS recycle bin)
-- **RAW**: hand-rolled embedded-JPEG extractor (Apache 2.0 / MIT
-  dependency tree only — no LGPL rawler/rawloader)
+- **RAW**: rawler (LGPL-2.1) for vendor-aware embedded-preview and
+  metadata extraction, with an EXIF/byte-scan fallback for TIFF containers
 
 ## Supported formats
 
 - **JPEG** — full
-- **RAW** — TIFF-container formats with embedded JPEG preview:
-  CR2, NEF, ARW, DNG, PEF, ORF. CR3 / RAF / HEIC not yet supported.
+- **RAW** — CR2, CR3, NEF, ARW, DNG, PEF, ORF, RAF. Decoding uses the
+  embedded preview (with a full demosaic fallback); timestamps / ISO /
+  orientation come from EXIF, falling back to rawler's metadata decoders
+  for the containers kamadak-exif can't walk (CR3, RAF).
+- **HEIC** — not supported (would need libheif, a C dependency that
+  breaks the self-contained release bundles).
 
 ## Build
 
@@ -113,6 +117,7 @@ Optional environment variables:
 | Var | Purpose |
 |---|---|
 | `PHOTO_PICK_BIND` | bind address, default `127.0.0.1:7777` |
+| `PHOTO_PICK_TOKEN` | access token required on every `/api` route. **Set this whenever the server listens on anything but localhost** — run ids are listable and `apply` deletes files, so an ungated LAN server lets anyone on the network delete your photos. Enter the same value in the UI's Settings dialog. |
 | `PHOTO_PICK_BROWSE_ROOTS` | path-list (`:`/`;`-separated) the browse/scan/reveal endpoints may touch; default home + media mounts |
 | `PHOTO_PICK_SCAN_CONCURRENCY` | max concurrent scan pipelines, default 2 |
 | `PHOTO_PICK_IMAGE_DECODE_CONCURRENCY` | max concurrent thumb/preview decodes, default CPU count |
@@ -135,7 +140,8 @@ path. Keys are the env var names minus the `PHOTO_PICK_` prefix, lowercase;
 explicitly-set env vars always win over the file:
 
 ```toml
-bind = "127.0.0.1:7777"
+bind = "0.0.0.0:7777"
+token = "a-long-random-string"
 browse_roots = "/home/me/Photos:/mnt/nas"
 thumb_disk_max_mb = 1024
 ```

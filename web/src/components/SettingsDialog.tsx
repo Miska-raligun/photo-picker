@@ -26,6 +26,7 @@ import {
   loadNotifyEnabled,
   saveNotifyEnabled,
 } from "@/lib/notifyStore";
+import { loadToken, saveToken } from "@/lib/tokenStore";
 import { toast } from "sonner";
 
 interface Props {
@@ -59,6 +60,10 @@ export function SettingsDialog({ open, onOpenChange, initial, onChange }: Props)
     loadNotifyEnabled()
   );
   const notifyApiUnavailable = typeof Notification === "undefined";
+  // Access token for servers started with PHOTO_PICK_TOKEN. Empty = the
+  // server isn't gated (or the user hasn't been given the token yet).
+  const [token, setToken] = useState(() => loadToken());
+  const [showToken, setShowToken] = useState(false);
 
   async function handleNotifyToggle(next: boolean) {
     if (!next) {
@@ -110,6 +115,7 @@ export function SettingsDialog({ open, onOpenChange, initial, onChange }: Props)
       saveVlmSettings({ mode: "env" });
       onChange({ mode: "env" });
     }
+    saveToken(token.trim());
     onOpenChange(false);
     toast.success(m.common.save + " ✓");
   }
@@ -166,6 +172,33 @@ export function SettingsDialog({ open, onOpenChange, initial, onChange }: Props)
                   <div className="font-medium">{m.settings.modeCustom}</div>
                 </div>
               </label>
+            </div>
+          </div>
+
+          <Separator />
+          <div>
+            <h3 className="font-semibold text-sm mb-1">{m.settings.tokenHeading}</h3>
+            <p className="text-xs text-muted-foreground mb-3">
+              {m.settings.tokenDesc}
+            </p>
+            <div className="relative">
+              <Input
+                type={showToken ? "text" : "password"}
+                value={token}
+                onChange={(e) => setToken(e.target.value)}
+                placeholder={m.settings.tokenPlaceholder}
+                className="font-mono text-xs pr-16"
+                autoComplete="off"
+              />
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => setShowToken(!showToken)}
+                className="absolute right-1 top-1 h-7 px-2"
+              >
+                {showToken ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+              </Button>
             </div>
           </div>
 
