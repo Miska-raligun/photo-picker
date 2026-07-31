@@ -171,6 +171,34 @@ export interface ExportResult {
   exported: number;
   failed: ApplyFailure[];
   target_dir: string;
+  /// XMP sidecars written alongside the exported files (0 when not requested).
+  xmp_written: number;
+}
+
+export interface DuplicatePhoto {
+  photo_id: string;
+  filename: string | null;
+  path: string;
+}
+
+export interface DuplicateGroup {
+  photos: DuplicatePhoto[];
+}
+
+export interface DuplicateReport {
+  groups: DuplicateGroup[];
+  /// Total photos that could be removed keeping one copy of each set.
+  redundant_count: number;
+}
+
+export interface SimilarPhoto {
+  photo_id: string;
+  filename: string | null;
+  similarity: number;
+}
+
+export interface SimilarReport {
+  similar: SimilarPhoto[];
 }
 
 /// One side of a cross-run keep-set comparison. `run_id` names the run the

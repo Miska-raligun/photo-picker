@@ -31,6 +31,7 @@ use std::path::PathBuf;
 /// visible warning instead of a silently ignored setting.
 const KNOWN_KEYS: &[&str] = &[
     "BIND",
+    "TOKEN",
     "BROWSE_ROOTS",
     "CORS_ANY",
     "SCAN_CONCURRENCY",

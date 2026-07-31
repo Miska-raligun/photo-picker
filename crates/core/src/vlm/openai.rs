@@ -120,17 +120,22 @@ impl VlmProvider for OpenAiProvider {
             .build()
             .into();
 
-        let mut resp = agent
-            .post(&self.base_url)
-            .header("authorization", format!("Bearer {}", self.api_key))
-            .header("content-type", "application/json")
-            .send_json(&body)
-            .map_err(|e| {
-                let err_str = e.to_string();
-                let safe = super::redact_secrets(&err_str);
-                tracing::warn!(elapsed_ms = start.elapsed().as_millis() as u64, error = %safe, "vlm openai request failed");
-                Error::Config(format!("openai request: {safe}"))
-            })?;
+        // One retry on transport errors and retryable statuses (429/5xx).
+        // VLM explain is a user-initiated button press; a transient network
+        // blip or a rate-limit hiccup shouldn't cost the user their click.
+        let mut resp = super::send_with_retry("openai", || {
+            agent
+                .post(&self.base_url)
+                .header("authorization", format!("Bearer {}", self.api_key))
+                .header("content-type", "application/json")
+                .send_json(&body)
+        })
+        .map_err(|e| {
+            let err_str = e.to_string();
+            let safe = super::redact_secrets(&err_str);
+            tracing::warn!(elapsed_ms = start.elapsed().as_millis() as u64, error = %safe, "vlm openai request failed");
+            Error::Config(format!("openai request: {safe}"))
+        })?;
         let status = resp.status();
         tracing::info!(
             elapsed_ms = start.elapsed().as_millis() as u64,

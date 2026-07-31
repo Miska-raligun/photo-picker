@@ -107,18 +107,22 @@ impl VlmProvider for AnthropicProvider {
             .build()
             .into();
 
-        let mut resp = agent
-            .post(&self.base_url)
-            .header("x-api-key", self.api_key.as_str())
-            .header("anthropic-version", API_VERSION)
-            .header("content-type", "application/json")
-            .send_json(&body)
-            .map_err(|e| {
-                let err_str = e.to_string();
-                let safe = super::redact_secrets(&err_str);
-                tracing::warn!(elapsed_ms = start.elapsed().as_millis() as u64, error = %safe, "vlm anthropic request failed");
-                Error::Config(format!("anthropic request: {safe}"))
-            })?;
+        // One retry on transport errors and retryable statuses (429/5xx) —
+        // see openai.rs counterpart.
+        let mut resp = super::send_with_retry("anthropic", || {
+            agent
+                .post(&self.base_url)
+                .header("x-api-key", self.api_key.as_str())
+                .header("anthropic-version", API_VERSION)
+                .header("content-type", "application/json")
+                .send_json(&body)
+        })
+        .map_err(|e| {
+            let err_str = e.to_string();
+            let safe = super::redact_secrets(&err_str);
+            tracing::warn!(elapsed_ms = start.elapsed().as_millis() as u64, error = %safe, "vlm anthropic request failed");
+            Error::Config(format!("anthropic request: {safe}"))
+        })?;
         let status = resp.status();
         tracing::info!(
             elapsed_ms = start.elapsed().as_millis() as u64,

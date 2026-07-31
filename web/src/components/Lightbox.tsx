@@ -12,6 +12,7 @@ import {
   Minus,
   Plus,
   RotateCcw,
+  Search,
   Sparkles,
   Trash2,
   X,
@@ -86,6 +87,14 @@ interface Props {
   /// details panel when `onSetTag` is provided.
   tag?: { flag?: boolean; note?: string } | null;
   onSetTag?: (tag: { flag?: boolean; note?: string }) => void;
+  /// "Find similar" results for the current photo, owned by the parent so
+  /// they survive panel toggles. `null` = not requested yet.
+  similar?: { photo_id: string; filename: string | null; similarity: number }[] | null;
+  similarLoading?: boolean;
+  similarError?: string | null;
+  onFindSimilar?: () => void;
+  /// Thumb URL builder for similar results (they belong to the same run).
+  similarThumbUrl?: (photoId: string) => string;
 }
 
 const ZOOM_MIN = 1;
@@ -131,6 +140,11 @@ export function Lightbox({
   onToggleVerdict,
   tag,
   onSetTag,
+  similar,
+  similarLoading,
+  similarError,
+  onFindSimilar,
+  similarThumbUrl,
 }: Props) {
   const m = useM();
   const [loaded, setLoaded] = useState(false);
@@ -538,6 +552,11 @@ export function Lightbox({
               filename={filename}
               tag={tag}
               onSetTag={onSetTag}
+              similar={similar}
+              similarLoading={similarLoading}
+              similarError={similarError}
+              onFindSimilar={onFindSimilar}
+              similarThumbUrl={similarThumbUrl}
               onClose={() => setShowDetails(false)}
             />
           )}
@@ -559,12 +578,22 @@ function DetailsPanel({
   filename,
   tag,
   onSetTag,
+  similar,
+  similarLoading,
+  similarError,
+  onFindSimilar,
+  similarThumbUrl,
   onClose,
 }: {
   details: LightboxDetails;
   filename: string | null;
   tag?: { flag?: boolean; note?: string } | null;
   onSetTag?: (tag: { flag?: boolean; note?: string }) => void;
+  similar?: { photo_id: string; filename: string | null; similarity: number }[] | null;
+  similarLoading?: boolean;
+  similarError?: string | null;
+  onFindSimilar?: () => void;
+  similarThumbUrl?: (photoId: string) => string;
   onClose: () => void;
 }) {
   const m = useM();
@@ -726,6 +755,52 @@ function DetailsPanel({
               rows={3}
               className="w-full rounded-md bg-white/5 border border-white/10 px-2.5 py-1.5 text-xs text-white/90 placeholder:text-white/35 focus:outline-none focus:ring-1 focus:ring-white/30 resize-y"
             />
+          </div>
+        )}
+
+        {/* Find similar — CLIP nearest neighbours across the whole run,
+            read from the feature cache the scan already populated. */}
+        {onFindSimilar && (
+          <div className="space-y-2 pt-2 border-t border-white/10">
+            <button
+              type="button"
+              onClick={onFindSimilar}
+              disabled={similarLoading}
+              className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium bg-white/10 text-white/80 hover:bg-white/20 disabled:opacity-50"
+            >
+              <Search className="h-3.5 w-3.5" />
+              {similarLoading ? m.detail.similarLoading : m.detail.findSimilar}
+            </button>
+            {similarError && (
+              <p className="text-[0.7rem] text-white/60">{similarError}</p>
+            )}
+            {similar && similar.length === 0 && (
+              <p className="text-[0.7rem] text-white/60">{m.detail.similarNone}</p>
+            )}
+            {similar && similar.length > 0 && (
+              <div className="grid grid-cols-3 gap-1.5">
+                {similar.map((sp) => (
+                  <div
+                    key={sp.photo_id}
+                    className="relative aspect-square rounded overflow-hidden bg-white/5"
+                    title={`${sp.filename ?? sp.photo_id} · ${(sp.similarity * 100).toFixed(0)}%`}
+                  >
+                    {similarThumbUrl && (
+                      <img
+                        src={similarThumbUrl(sp.photo_id)}
+                        alt={sp.filename ?? ""}
+                        loading="lazy"
+                        decoding="async"
+                        className="h-full w-full object-cover"
+                      />
+                    )}
+                    <span className="absolute bottom-0 right-0 bg-black/70 text-white text-[0.6rem] font-mono px-1 rounded-tl">
+                      {(sp.similarity * 100).toFixed(0)}%
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </div>

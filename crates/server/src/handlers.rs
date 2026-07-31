@@ -833,6 +833,140 @@ pub async fn diff_runs(
     .into_response()
 }
 
+/// Byte-identical duplicate sets within a run, grouped by content hash.
+/// Catches "imported the same card twice" / "copy lives in two folders" —
+/// zero extra computation, the scanner already hashed every file.
+pub async fn exact_duplicates(
+    State(state): State<AppState>,
+    Path(run_id): Path<String>,
+) -> impl IntoResponse {
+    state.ensure_rehydrated(&run_id).await;
+    let guard = state.runs.lock().await;
+    let Some(rec) = guard.get(&run_id) else {
+        return (StatusCode::NOT_FOUND, "run not found").into_response();
+    };
+    let mut by_sha: HashMap<[u8; 16], Vec<&photo_pick_core::ingest::PhotoRef>> = HashMap::new();
+    for p in rec.photos.values() {
+        by_sha.entry(p.sha256_short).or_default().push(p);
+    }
+    let mut groups: Vec<serde_json::Value> = Vec::new();
+    let mut redundant = 0usize;
+    for (_, mut members) in by_sha {
+        if members.len() < 2 {
+            continue;
+        }
+        members.sort_by(|a, b| a.path.cmp(&b.path));
+        redundant += members.len() - 1;
+        groups.push(serde_json::json!({
+            "photos": members
+                .iter()
+                .map(|p| serde_json::json!({
+                    "photo_id": p.id.0.to_string(),
+                    "filename": p.path.file_name().map(|n| n.to_string_lossy().to_string()),
+                    "path": p.path,
+                }))
+                .collect::<Vec<_>>(),
+        }));
+    }
+    // Deterministic order for the UI: biggest sets first, then by first path.
+    groups.sort_by_key(|g| std::cmp::Reverse(g["photos"].as_array().map(|a| a.len()).unwrap_or(0)));
+    Json(serde_json::json!({
+        "groups": groups,
+        "redundant_count": redundant,
+    }))
+    .into_response()
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SimilarQuery {
+    pub k: Option<usize>,
+}
+
+/// Nearest neighbours of one photo by CLIP cosine similarity, computed from
+/// the run's on-disk feature cache (embeddings are already extracted and
+/// stored there — this endpoint never touches the image files).
+pub async fn similar_photos(
+    State(state): State<AppState>,
+    Path((run_id, photo_id)): Path<(String, String)>,
+    axum::extract::Query(q): axum::extract::Query<SimilarQuery>,
+) -> impl IntoResponse {
+    let Ok(uuid) = Uuid::parse_str(&photo_id) else {
+        return (StatusCode::BAD_REQUEST, "bad photo id").into_response();
+    };
+    let target_pid = photo_pick_core::ingest::PhotoId(uuid);
+    let k = q.k.unwrap_or(12).clamp(1, 48);
+
+    state.ensure_rehydrated(&run_id).await;
+    // Snapshot everything the blocking task needs, then release the lock.
+    let (target_sha, others, cache_path) = {
+        let guard = state.runs.lock().await;
+        let Some(rec) = guard.get(&run_id) else {
+            return (StatusCode::NOT_FOUND, "run not found").into_response();
+        };
+        let Some(target) = rec.photos.get(&target_pid) else {
+            return (StatusCode::NOT_FOUND, "photo not in run").into_response();
+        };
+        let others: Vec<(String, Option<String>, [u8; 16])> = rec
+            .photos
+            .values()
+            .filter(|p| p.id != target_pid && p.sha256_short != target.sha256_short)
+            .map(|p| {
+                (
+                    p.id.0.to_string(),
+                    p.path.file_name().map(|n| n.to_string_lossy().to_string()),
+                    p.sha256_short,
+                )
+            })
+            .collect();
+        (
+            target.sha256_short,
+            others,
+            rec.output.join(".cache.db"),
+        )
+    };
+
+    let result = tokio::task::spawn_blocking(move || -> Result<Vec<serde_json::Value>, String> {
+        let cache = photo_pick_core::cache::CacheStore::open(&cache_path)
+            .map_err(|e| format!("open feature cache: {e}"))?;
+        let target_embed = cache
+            .get(&target_sha, target_pid)
+            .map_err(|e| e.to_string())?
+            .and_then(|f| f.clip_embed)
+            .ok_or_else(|| "no CLIP embedding cached for this photo (scan with CLIP enabled first)".to_string())?;
+        let mut scored: Vec<(f32, String, Option<String>)> = Vec::with_capacity(others.len());
+        for (pid, filename, sha) in others {
+            let Ok(Some(feat)) = cache.get(&sha, target_pid) else { continue };
+            let Some(embed) = feat.clip_embed else { continue };
+            if embed.len() != target_embed.len() {
+                continue;
+            }
+            // Embeddings are L2-normalized at encode time, so the dot
+            // product IS the cosine similarity.
+            let sim: f32 = target_embed.iter().zip(embed.iter()).map(|(a, b)| a * b).sum();
+            scored.push((sim, pid, filename));
+        }
+        scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        scored.truncate(k);
+        Ok(scored
+            .into_iter()
+            .map(|(sim, pid, filename)| {
+                serde_json::json!({
+                    "photo_id": pid,
+                    "filename": filename,
+                    "similarity": sim,
+                })
+            })
+            .collect())
+    })
+    .await;
+
+    match result {
+        Ok(Ok(items)) => Json(serde_json::json!({ "similar": items })).into_response(),
+        Ok(Err(msg)) => (StatusCode::CONFLICT, msg).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("similar task: {e}")).into_response(),
+    }
+}
+
 fn photo_view(
     rec: &RunRecord,
     pid: &photo_pick_core::ingest::PhotoId,
@@ -1424,6 +1558,20 @@ pub struct ExportRequest {
     /// cross filesystems where hardlink fails (place_file falls back anyway).
     #[serde(default)]
     pub link_mode: Option<String>,
+    /// Write an XMP sidecar (`<name>.xmp`) next to each exported file so
+    /// Lightroom / Capture One / digiKam pick up the cull results: exported
+    /// keepers get xmp:Rating 4, flagged ones 5, notes land in
+    /// dc:description. Off by default (opt-in from the export dialog).
+    #[serde(default)]
+    pub write_xmp: bool,
+    /// Photo ids the user flagged in the UI (drives Rating 5). Client-owned
+    /// state — flags live in the browser's localStorage, so the request
+    /// carries them.
+    #[serde(default)]
+    pub flagged_ids: Vec<String>,
+    /// Per-photo free-text notes, keyed by photo id (drives dc:description).
+    #[serde(default)]
+    pub notes: HashMap<String, String>,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -1432,6 +1580,45 @@ pub struct ExportResult {
     pub exported: usize,
     pub failed: Vec<ApplyFailure>,
     pub target_dir: PathBuf,
+    /// Number of XMP sidecars written (0 when `write_xmp` was false).
+    pub xmp_written: usize,
+}
+
+/// Minimal XMP sidecar packet: xmp:Rating (1-5) plus an optional
+/// dc:description carrying the user's note. This is the subset Lightroom /
+/// Capture One / digiKam all read; anything fancier (labels, hierarchical
+/// keywords) can layer on later without breaking these files.
+fn xmp_sidecar(rating: u8, note: Option<&str>) -> String {
+    let description = note
+        .filter(|n| !n.trim().is_empty())
+        .map(|n| {
+            format!(
+                "\n   <dc:description><rdf:Alt><rdf:li xml:lang=\"x-default\">{}</rdf:li></rdf:Alt></dc:description>",
+                xml_escape(n)
+            )
+        })
+        .unwrap_or_default();
+    format!(
+        r#"<?xpacket begin="﻿" id="W5M0MpCehiHzreSzNTczkc9d"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+    xmlns:dc="http://purl.org/dc/elements/1.1/"
+    xmp:Rating="{rating}">{description}
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>
+<?xpacket end="w"?>
+"#
+    )
+}
+
+fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 /// Pick a non-colliding destination path inside `dir` for `name`. Flat layout
@@ -1502,6 +1689,9 @@ pub async fn export(
 
     let mode = parse_link_mode(req.link_mode.as_deref().unwrap_or("copy"));
     let target = req.target_dir.clone();
+    let write_xmp = req.write_xmp;
+    let flagged: std::collections::HashSet<String> = req.flagged_ids.iter().cloned().collect();
+    let notes = req.notes.clone();
     let result = tokio::task::spawn_blocking(move || -> std::result::Result<ExportResult, String> {
         std::fs::create_dir_all(&target).map_err(|e| format!("create target dir: {e}"))?;
         // Seed `used` with existing entries so we don't clobber prior contents.
@@ -1513,6 +1703,7 @@ pub async fn export(
         }
         let canonical_root = std::fs::canonicalize(&run_root).unwrap_or(run_root);
         let mut exported = 0usize;
+        let mut xmp_written = 0usize;
         let mut failed: Vec<ApplyFailure> = Vec::new();
         for (id, src) in &resolved {
             // Same safety check as apply: refuse symlinks that resolve
@@ -1547,7 +1738,26 @@ pub async fn export(
                 .unwrap_or_else(|| std::ffi::OsStr::new("photo"));
             let dest = unique_dest(&target, name, &mut used);
             match photo_pick_core::output::place_file(src, &dest, mode) {
-                Ok(()) => exported += 1,
+                Ok(()) => {
+                    exported += 1;
+                    if write_xmp {
+                        let rating = if flagged.contains(id) { 5 } else { 4 };
+                        let note = notes.get(id).map(String::as_str);
+                        let sidecar = dest.with_extension("xmp");
+                        match std::fs::write(&sidecar, xmp_sidecar(rating, note)) {
+                            Ok(()) => xmp_written += 1,
+                            Err(e) => {
+                                // Sidecar failure shouldn't fail the export of
+                                // the image itself — record and continue.
+                                failed.push(ApplyFailure {
+                                    photo_id: id.clone(),
+                                    path: sidecar,
+                                    error: format!("xmp sidecar: {e}"),
+                                });
+                            }
+                        }
+                    }
+                }
                 Err(e) => failed.push(ApplyFailure {
                     photo_id: id.clone(),
                     path: dest,
@@ -1560,6 +1770,7 @@ pub async fn export(
             exported,
             failed,
             target_dir: target,
+            xmp_written,
         })
     })
     .await;
