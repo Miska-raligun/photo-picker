@@ -28,6 +28,12 @@ except the explicit VLM calls you trigger with your own key.
   - default: copies / hardlinks selected files into an output directory
   - **in-place**: leaves the source untouched until you click **Apply**
     in the UI, which sends rejected files to the OS recycle bin
+- **Star ratings for one-off shots**: selection only compares photos
+  within a group, so a trip of mostly single shots keeps everything.
+  Export with XMP sidecars and *Stars from the aesthetic score* to get
+  ★1–4 ranked against the whole run (★4 = top 15 %, flagged = ★5), then
+  filter the best of the trip in Lightroom / Capture One / digiKam.
+  (Lightroom reads `.xmp` sidecars for RAW files only.)
 - **VLM explanations** (optional): asks a chosen VLM to rank the photos
   in a group from best to worst with one-sentence reasons; the UI
   overlays per-photo rank badges and inline reasons. Independent of
@@ -40,14 +46,16 @@ except the explicit VLM calls you trigger with your own key.
 | Exposure, white balance, sharpness, noise | Real |
 | Stage A burst clustering (CLIP cosine) | Real |
 | Stage B composition clustering (CLIP cosine) | Real |
-| Face detection (YuNet, opencv_zoo) | Real (bbox + 5 keypoints; eye-open / smile pending) |
-| Aesthetic score | Heuristic (luma range + hue diversity + saturation). Real CLIP-IQA pending. |
+| Face detection (YuNet, opencv_zoo) | Real (bbox + 5 keypoints; smile is a keypoint heuristic) |
+| Eye open / closed | Learned (OCEC classifier on keypoint-aligned eye crops); Laplacian heuristic fallback |
+| Aesthetic score | Learned (LAION aesthetic linear head on the CLIP embedding, weights built in); heuristic fallback without CLIP |
 | Composition score | Heuristic (Laplacian saliency + rule-of-thirds + size + edge clipping). |
 | VLM explain | Real (OpenAI-compatible + Anthropic Messages API) |
 
 ## Tech stack
 
-- **Core**: Rust 1.95, ort 2.0 (ONNX Runtime), CLIP ViT-B/32, YuNet
+- **Core**: Rust 1.95, ort 2.0 (ONNX Runtime), CLIP ViT-B/32, YuNet, OCEC,
+  LAION aesthetic predictor
 - **Server**: axum 0.7, tokio, rust-embed
 - **UI**: Vite 8 + React 19 + TypeScript + Tailwind v4 + shadcn/ui +
   sonner + lucide-react
@@ -92,8 +100,10 @@ cd ..
 cargo build --release --bin photo-pick-server
 ```
 
-The first scan downloads the CLIP and YuNet ONNX models to
-`~/.cache/photo-pick/models/` (~85MB + ~230KB, SHA-256 pinned).
+The first scan downloads the CLIP, YuNet and OCEC ONNX models to
+`~/.cache/photo-pick/models/` (~85MB + ~230KB + ~0.5MB, SHA-256 pinned).
+If the eye classifier can't be fetched, scans still run with a heuristic
+eye-open signal.
 
 ### Testing without ONNX
 

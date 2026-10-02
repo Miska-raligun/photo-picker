@@ -37,6 +37,19 @@ export interface PipelineReport {
   picked_count: number;
   rejected_count: number;
   elapsed: { secs: number; nanos: number };
+  /** Photos that couldn't be scanned/decoded/scored — neither kept nor
+   *  rejected, left untouched. Exact count; `skipped` is capped server-side.
+   *  Optional for runs recorded by older servers. */
+  skipped_count?: number;
+  skipped?: SkippedPhoto[];
+}
+
+export type SkipStage = "scan" | "decode" | "features";
+
+export interface SkippedPhoto {
+  path: string;
+  stage: SkipStage;
+  reason: string;
 }
 
 export type RunStatus =
@@ -173,6 +186,8 @@ export interface ExportResult {
   target_dir: string;
   /// XMP sidecars written alongside the exported files (0 when not requested).
   xmp_written: number;
+  /** Sidecars whose rating came from the aesthetic score. Absent on older servers. */
+  xmp_scored?: number;
 }
 
 export interface DuplicatePhoto {

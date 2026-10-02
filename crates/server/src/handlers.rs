@@ -1606,6 +1606,12 @@ pub struct ExportRequest {
     /// Per-photo free-text notes, keyed by photo id (drives dc:description).
     #[serde(default)]
     pub notes: HashMap<String, String>,
+    /// Derive each sidecar's xmp:Rating from the photo's aesthetic score,
+    /// ranked against every scored photo in the run (★4 top 15 %, ★3 next
+    /// 30 %, ★2 next 35 %, ★1 bottom 20 %) instead of a flat 4. Flagged
+    /// photos still get 5; photos without a score (CLIP off) keep 4.
+    #[serde(default)]
+    pub score_ratings: bool,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -1616,6 +1622,9 @@ pub struct ExportResult {
     pub target_dir: PathBuf,
     /// Number of XMP sidecars written (0 when `write_xmp` was false).
     pub xmp_written: usize,
+    /// How many of those sidecars carry a score-derived rating (vs. the
+    /// flag / fixed fallback).
+    pub xmp_scored: usize,
 }
 
 /// Minimal XMP sidecar packet: xmp:Rating (1-5) plus an optional
@@ -1696,10 +1705,28 @@ pub async fn export(
 ) -> impl IntoResponse {
     state.ensure_rehydrated(&run_id).await;
     // Resolve photo ids to source paths under the lock, then release for I/O.
-    let (resolved, run_root): (Vec<(String, PathBuf)>, PathBuf) = {
+    // Score-based star ratings are computed here too: they rank against the
+    // whole run, not just the photos being exported, so a photo's stars don't
+    // change with what else happens to be in the export.
+    let (resolved, run_root, score_stars): (Vec<(String, PathBuf)>, PathBuf, HashMap<String, u8>) = {
         let guard = state.runs.lock().await;
         let Some(rec) = guard.get(&run_id) else {
             return (StatusCode::NOT_FOUND, "run not found").into_response();
+        };
+        let score_stars: HashMap<String, u8> = if req.write_xmp && req.score_ratings {
+            let mut by_photo: HashMap<photo_pick_core::ingest::PhotoId, f32> = HashMap::new();
+            for cp in &rec.composition_picks {
+                for (pid, fs) in cp.kept.iter().chain(cp.rejected.iter()) {
+                    by_photo.insert(*pid, fs.aesthetic);
+                }
+            }
+            let scores: Vec<_> = by_photo.into_iter().collect();
+            photo_pick_core::output::aesthetic_star_ratings(&scores)
+                .into_iter()
+                .map(|(pid, stars)| (pid.to_string(), stars))
+                .collect()
+        } else {
+            HashMap::new()
         };
         let mut out = Vec::with_capacity(req.photo_ids.len());
         for id_str in &req.photo_ids {
@@ -1718,7 +1745,7 @@ pub async fn export(
                 }
             }
         }
-        (out, rec.root.clone())
+        (out, rec.root.clone(), score_stars)
     };
 
     let mode = parse_link_mode(req.link_mode.as_deref().unwrap_or("copy"));
@@ -1738,6 +1765,7 @@ pub async fn export(
         let canonical_root = std::fs::canonicalize(&run_root).unwrap_or(run_root);
         let mut exported = 0usize;
         let mut xmp_written = 0usize;
+        let mut xmp_scored = 0usize;
         let mut failed: Vec<ApplyFailure> = Vec::new();
         for (id, src) in &resolved {
             // Same safety check as apply: refuse symlinks that resolve
@@ -1775,11 +1803,17 @@ pub async fn export(
                 Ok(()) => {
                     exported += 1;
                     if write_xmp {
-                        let rating = if flagged.contains(id) { 5 } else { 4 };
+                        let scored = score_stars.get(id).copied();
+                        let rating = if flagged.contains(id) { 5 } else { scored.unwrap_or(4) };
                         let note = notes.get(id).map(String::as_str);
                         let sidecar = dest.with_extension("xmp");
                         match std::fs::write(&sidecar, xmp_sidecar(rating, note)) {
-                            Ok(()) => xmp_written += 1,
+                            Ok(()) => {
+                                xmp_written += 1;
+                                if scored.is_some() && !flagged.contains(id) {
+                                    xmp_scored += 1;
+                                }
+                            }
                             Err(e) => {
                                 // Sidecar failure shouldn't fail the export of
                                 // the image itself — record and continue.
@@ -1805,6 +1839,7 @@ pub async fn export(
             failed,
             target_dir: target,
             xmp_written,
+            xmp_scored,
         })
     })
     .await;

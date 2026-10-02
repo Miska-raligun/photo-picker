@@ -29,7 +29,8 @@ pub struct PhotoFeatures {
     #[serde(skip)]
     pub clip_embed: Option<Vec<f32>>,
 
-    /// Aesthetic score in `[0, 1]` (M3.4 stub returns 0.5 for now).
+    /// Aesthetic score in `[0, 1]`: the learned LAION head over `clip_embed`
+    /// when present, else the visual-statistics heuristic.
     pub aesthetic: Option<f32>,
     /// Composition score in `[0, 1]` (M3.6 stub returns 0.5 for now).
     pub composition: Option<f32>,

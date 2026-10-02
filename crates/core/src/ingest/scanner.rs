@@ -1,4 +1,6 @@
-use super::{exif::extract_exif_info, ImageFormat, PhotoId, PhotoRef, RawKind};
+use super::{
+    exif::extract_exif_info, ImageFormat, PhotoId, PhotoRef, RawKind, SkipStage, SkippedPhoto,
+};
 use crate::error::{Error, Result};
 use rayon::prelude::*;
 use sha2::{Digest, Sha256};
@@ -44,6 +46,16 @@ impl Default for FsScanner {
 
 impl Scanner for FsScanner {
     fn scan(&self, root: &Path) -> Result<Vec<PhotoRef>> {
+        self.scan_with_skips(root).map(|(photos, _)| photos)
+    }
+}
+
+impl FsScanner {
+    /// Like [`Scanner::scan`], but also returns the supported-format files (and
+    /// unreadable directory entries) that were skipped, with reasons. Files of
+    /// unsupported formats aren't "skipped photos" — a folder walk is expected
+    /// to pass over sidecars, videos, etc.
+    pub fn scan_with_skips(&self, root: &Path) -> Result<(Vec<PhotoRef>, Vec<SkippedPhoto>)> {
         // Walk the tree sequentially (cheap directory listing), collecting
         // supported files. The expensive per-file work — full-content SHA-256
         // plus EXIF parsing — is then run in parallel, since on large libraries
@@ -54,11 +66,14 @@ impl Scanner for FsScanner {
             .filter_entry(|e| !is_hidden(e.path()));
 
         let mut candidates: Vec<(PathBuf, ImageFormat)> = Vec::new();
+        let mut skipped: Vec<SkippedPhoto> = Vec::new();
         for entry in walker {
             let entry = match entry {
                 Ok(e) => e,
                 Err(err) => {
                     tracing::warn!(error = %err, "skipping unreadable entry");
+                    let path = err.path().map(Path::to_path_buf).unwrap_or_else(|| root.to_path_buf());
+                    skipped.push(SkippedPhoto::new(path, SkipStage::Scan, &err));
                     continue;
                 }
             };
@@ -71,36 +86,57 @@ impl Scanner for FsScanner {
         }
 
         // `par_iter().collect()` preserves input (walk) order.
-        let out: Vec<PhotoRef> = candidates
+        let results: Vec<std::result::Result<PhotoRef, SkippedPhoto>> = candidates
             .into_par_iter()
-            .filter_map(|(path, format)| match build_photo_ref(path.clone(), format) {
-                Ok(p) => Some(p),
+            .map(|(path, format)| match build_photo_ref(path.clone(), format) {
+                Ok(p) => Ok(p),
                 Err(err) => {
                     tracing::warn!(path = %path.display(), %err, "skipping unreadable photo");
-                    None
+                    Err(SkippedPhoto::new(path, SkipStage::Scan, err))
                 }
             })
             .collect();
+        let mut out = Vec::with_capacity(results.len());
+        for r in results {
+            match r {
+                Ok(p) => out.push(p),
+                Err(s) => skipped.push(s),
+            }
+        }
 
         if out.is_empty() {
             return Err(Error::EmptyScan { root: root.to_path_buf() });
         }
-        Ok(out)
+        Ok((out, skipped))
     }
 }
 
 /// Scan an explicit caller-provided list of photo file paths. Skips entries
 /// that don't classify as a supported format or fail to open.
 pub fn scan_files(paths: &[std::path::PathBuf]) -> Result<Vec<PhotoRef>> {
+    scan_files_with_skips(paths).map(|(photos, _)| photos)
+}
+
+/// Like [`scan_files`], but also returns what was skipped and why. Unlike a
+/// folder walk, an unsupported extension here *is* reported: the caller named
+/// the file explicitly.
+pub fn scan_files_with_skips(
+    paths: &[std::path::PathBuf],
+) -> Result<(Vec<PhotoRef>, Vec<SkippedPhoto>)> {
     let mut out = Vec::new();
+    let mut skipped = Vec::new();
     for path in paths {
         let Some(format) = classify(path) else {
             tracing::warn!(path = %path.display(), "skipping (unsupported extension)");
+            skipped.push(SkippedPhoto::new(path, SkipStage::Scan, "unsupported file type"));
             continue;
         };
         match build_photo_ref(path.clone(), format) {
             Ok(p) => out.push(p),
-            Err(err) => tracing::warn!(path = %path.display(), %err, "skipping unreadable photo"),
+            Err(err) => {
+                tracing::warn!(path = %path.display(), %err, "skipping unreadable photo");
+                skipped.push(SkippedPhoto::new(path, SkipStage::Scan, err));
+            }
         }
     }
     if out.is_empty() {
@@ -112,7 +148,7 @@ pub fn scan_files(paths: &[std::path::PathBuf]) -> Result<Vec<PhotoRef>> {
                 .unwrap_or_else(|| std::path::PathBuf::from(".")),
         });
     }
-    Ok(out)
+    Ok((out, skipped))
 }
 
 /// Public helper so callers (like the browse endpoint) can ask "is this a
@@ -222,6 +258,23 @@ mod tests {
         assert_eq!(names, ["a.jpg", "b.JPEG", "c.nef"]);
         // Distinct content must yield distinct content hashes.
         assert_ne!(refs[0].sha256_short, refs[1].sha256_short);
+    }
+
+    #[test]
+    fn explicit_file_list_reports_what_it_skips() {
+        let dir = tempdir().unwrap();
+        let good = dir.path().join("a.jpg");
+        fs::write(&good, b"bytes").unwrap();
+        let unsupported = dir.path().join("clip.mov");
+        fs::write(&unsupported, b"video").unwrap();
+        let missing = dir.path().join("gone.jpg");
+
+        let (refs, skipped) =
+            scan_files_with_skips(&[good, unsupported.clone(), missing.clone()]).unwrap();
+        assert_eq!(refs.len(), 1);
+        let paths: Vec<_> = skipped.iter().map(|s| s.path.clone()).collect();
+        assert_eq!(paths, [unsupported, missing]);
+        assert!(skipped.iter().all(|s| s.stage == SkipStage::Scan && !s.reason.is_empty()));
     }
 
     #[test]

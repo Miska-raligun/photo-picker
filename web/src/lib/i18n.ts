@@ -182,6 +182,8 @@ const enMessages = {
       statKept: "kept",
       statRejected: "rejected",
       statElapsed: "elapsed",
+      statSkipped: "skipped",
+      statSkippedTitle: "Couldn't be read or scored — not sorted, left untouched",
       openHtmlReport: "Open full HTML report",
       viewResults: "View results",
       taskDetails: "Task details",
@@ -192,6 +194,12 @@ const enMessages = {
       notifyCompleteFallback: "Scan complete.",
     },
     runDetail: {
+      skippedTitle: (n: number) =>
+        `${n} ${n === 1 ? "photo was" : "photos were"} skipped`,
+      skippedHint:
+        "These files couldn't be read or scored, so they were neither kept nor rejected. They stay untouched in the source folder — check them by hand.",
+      skippedMore: (n: number) => `…and ${n} more (see the server log)`,
+      skipStage: { scan: "read", decode: "decode", features: "scoring" },
       downloadJson: "Download JSON",
       copyHtmlPath: "Copy HTML path",
       copiedHtmlPath: "HTML report path copied",
@@ -323,7 +331,12 @@ const enMessages = {
       toastFailed: "Export failed",
       writeXmp: "Write XMP sidecars",
       writeXmpDesc:
-        "Drop a .xmp next to each exported photo so Lightroom / Capture One / digiKam import the results: rating 4, flagged photos 5, notes as description.",
+        "Drop a .xmp next to each exported photo so Lightroom / Capture One / digiKam import the results: flagged photos get 5 stars, notes become the description. (Lightroom reads .xmp sidecars for RAW files only.)",
+      scoreRatings: "Stars from the aesthetic score",
+      noScoresForRating:
+        "This run has no aesthetic scores (scanned without CLIP?), so sidecars got the default ★4.",
+      scoreRatingsDesc:
+        "Ranked against every scored photo in this run: ★4 top 15%, ★3 next 30%, ★2 next 35%, ★1 bottom 20% — filter ≥★4 to see the best shots of a trip. Off: every photo gets ★4.",
     },
     applyBar: {
       willDelete: "Will delete",
@@ -537,6 +550,8 @@ export const messages: Record<Lang, Messages> = {
       statKept: "保留",
       statRejected: "拒绝",
       statElapsed: "耗时",
+      statSkipped: "跳过",
+      statSkippedTitle: "无法读取或评分 · 未参与筛选，原文件保持不动",
       openHtmlReport: "打开完整 HTML 报告",
       viewResults: "查看结果",
       taskDetails: "任务结果",
@@ -546,6 +561,11 @@ export const messages: Record<Lang, Messages> = {
       notifyCompleteFallback: "扫描完成。",
     },
     runDetail: {
+      skippedTitle: (n: number) => `${n} 张照片被跳过`,
+      skippedHint:
+        "这些文件无法读取或评分，既没有被保留也没有被拒绝，原文件保持不动。建议手动检查。",
+      skippedMore: (n: number) => `…还有 ${n} 张（详见服务端日志）`,
+      skipStage: { scan: "读取", decode: "解码", features: "评分" },
       downloadJson: "下载 JSON",
       copyHtmlPath: "复制 HTML 路径",
       copiedHtmlPath: "HTML 报告路径已复制",
@@ -676,7 +696,11 @@ export const messages: Record<Lang, Messages> = {
       toastFailed: "导出失败",
       writeXmp: "同时写入 XMP 边车文件",
       writeXmpDesc:
-        "在每张导出照片旁生成 .xmp，让 Lightroom / Capture One / digiKam 直接读到结果：评级 4 星，已旗标的 5 星，备注写入说明字段。",
+        "在每张导出照片旁生成 .xmp，让 Lightroom / Capture One / digiKam 直接读到结果：已旗标的 5 星，备注写入说明字段。（Lightroom 只读取 RAW 文件的 .xmp 边车。）",
+      scoreRatings: "按美学分打星",
+      noScoresForRating: "本次任务没有美学分（扫描时可能未启用 CLIP），边车文件使用默认的 ★4。",
+      scoreRatingsDesc:
+        "与本次任务中所有已评分照片比较：前 15% ★4，其后 30% ★3，再 35% ★2，最后 20% ★1。在 Lightroom 里筛选 ≥★4 即可看到这趟旅行最好的照片。关闭则全部 ★4。",
     },
     applyBar: {
       willDelete: "即将删除",

@@ -5,12 +5,44 @@ mod scanner;
 
 pub use decoder::{decode_thumbnail, decode_thumbnail_for, encode_jpeg, ThumbnailSpec};
 pub use exif::ExifInfo;
-pub use scanner::{classify_extension, scan_files, FsScanner, PhotoSource, Scanner};
+pub use scanner::{
+    classify_extension, scan_files, scan_files_with_skips, FsScanner, PhotoSource, Scanner,
+};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use uuid::Uuid;
+
+/// Pipeline step at which a photo was dropped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SkipStage {
+    /// Couldn't be listed/opened/hashed, or isn't a supported format.
+    Scan,
+    /// Opened, but no image could be decoded from it (corrupt file, RAW
+    /// without a usable preview, ...).
+    Decode,
+    /// Decoded, but feature extraction / scoring failed.
+    Features,
+}
+
+/// A photo the pipeline couldn't process. These used to be dropped with only
+/// a log line — neither picked nor rejected — so a scan could silently cover
+/// fewer files than the folder holds. Carried in the run report so the UI
+/// can say how many were skipped and why.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SkippedPhoto {
+    pub path: PathBuf,
+    pub stage: SkipStage,
+    pub reason: String,
+}
+
+impl SkippedPhoto {
+    pub fn new(path: impl Into<PathBuf>, stage: SkipStage, reason: impl std::fmt::Display) -> Self {
+        Self { path: path.into(), stage, reason: reason.to_string() }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct PhotoId(pub Uuid);

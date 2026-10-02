@@ -2,7 +2,7 @@ use super::{hash::HashOnlyExtractor, FeatureExtractor, PhotoFeatures};
 use crate::error::Result;
 use crate::ingest::PhotoRef;
 use crate::scoring::{
-    compute_raw_scores, AestheticScorer, CompositionScorer, FaceDetector,
+    compute_raw_scores, learned_aesthetic, AestheticScorer, CompositionScorer, FaceDetector,
     HeuristicAestheticScorer, HeuristicCompositionScorer, NoFaceDetectorStub,
 };
 use image::DynamicImage;
@@ -84,7 +84,12 @@ impl FeatureExtractor for FullExtractor {
         #[cfg(not(feature = "onnx"))]
         let clip_embed: Option<Vec<f32>> = None;
 
-        let aesthetic = self.aesthetic.score(thumb);
+        // Learned LAION head when we have a CLIP embedding; the configured
+        // (heuristic) scorer only when CLIP is off or failed to load.
+        let aesthetic = clip_embed
+            .as_deref()
+            .and_then(learned_aesthetic)
+            .unwrap_or_else(|| self.aesthetic.score(thumb));
         let composition = self.composition.score(thumb);
         let face = self.face.detect(thumb);
 

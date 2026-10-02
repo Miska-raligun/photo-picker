@@ -44,6 +44,7 @@ export function ExportDialog({ open, onOpenChange, runId, picks, overrides, tags
   const [browseOpen, setBrowseOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [writeXmp, setWriteXmp] = useState(false);
+  const [scoreRatings, setScoreRatings] = useState(true);
 
   function handleBrowse(result: BrowseResult) {
     if (result.kind === "folder") setTarget(result.path);
@@ -63,6 +64,7 @@ export function ExportDialog({ open, onOpenChange, runId, picks, overrides, tags
                 .map((id) => [id, tags.get(id)?.note?.trim() ?? ""] as const)
                 .filter(([, note]) => note.length > 0)
             ),
+            scoreRatings,
           }
         : undefined;
       const r = await api.export(runId, keptIds, target, linkMode, xmp);
@@ -78,6 +80,16 @@ export function ExportDialog({ open, onOpenChange, runId, picks, overrides, tags
             .map((f) => `${f.path.split("/").pop()}: ${f.error}`)
             .join("\n"),
         });
+      }
+      // Score-based stars asked for, but nothing (besides flags) got one —
+      // e.g. the run was scanned without CLIP. Say so rather than letting
+      // every sidecar quietly fall back to ★4.
+      if (
+        xmp?.scoreRatings &&
+        (r.xmp_scored ?? 0) === 0 &&
+        r.xmp_written > xmp.flaggedIds.length
+      ) {
+        toast.info(m.export.noScoresForRating);
       }
       onOpenChange(false);
     } catch (e) {
@@ -134,6 +146,22 @@ export function ExportDialog({ open, onOpenChange, runId, picks, overrides, tags
                 </div>
               </div>
             </label>
+            {writeXmp && (
+              <label className="flex items-start gap-2 cursor-pointer pl-6">
+                <input
+                  type="checkbox"
+                  checked={scoreRatings}
+                  onChange={(e) => setScoreRatings(e.target.checked)}
+                  className="mt-0.5 accent-primary"
+                />
+                <div className="text-sm">
+                  <div className="font-medium">{m.export.scoreRatings}</div>
+                  <div className="text-xs text-muted-foreground">
+                    {m.export.scoreRatingsDesc}
+                  </div>
+                </div>
+              </label>
+            )}
             <div className="grid gap-1.5">
 
               <label className="text-xs font-medium text-muted-foreground">

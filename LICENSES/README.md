@@ -25,3 +25,12 @@ Our release tarballs include this directory so the LGPL-2.1 text travels
 with every binary. If photo-pick ever moves to a closed-source commercial
 distribution, the simplest path is to either continue providing object files
 for the LGPL'd portion or switch to a more permissive RAW decoder.
+
+## Model weights
+
+| Model | Source | License | How it ships |
+|---|---|---|---|
+| LAION aesthetic predictor (ViT-B/32 linear head) | [LAION-AI/aesthetic-predictor](https://github.com/LAION-AI/aesthetic-predictor) | MIT, © 2022 LAION AI | 513 weights compiled in (`crates/core/src/scoring/aesthetic_laion_weights.rs`) |
+| OCEC eye-state classifier (S) | [PINTO0309/OCEC](https://github.com/PINTO0309/OCEC) | MIT, © 2025 Katsuya Hyodo | Downloaded on first scan / bundled by `scripts/fetch_models.sh` |
+| YuNet face detector | [opencv/opencv_zoo](https://github.com/opencv/opencv_zoo) | MIT, © 2020 Shiqi Yu | Downloaded on first scan / bundled |
+| CLIP ViT-B/32 vision (quantized) | [Xenova/clip-vit-base-patch32](https://huggingface.co/Xenova/clip-vit-base-patch32) | MIT (OpenAI CLIP) | Downloaded on first scan / bundled |

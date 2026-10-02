@@ -7,7 +7,9 @@
 //! which depends on subject and lighting.
 
 pub mod aesthetic;
+mod aesthetic_laion_weights;
 pub mod composition;
+pub mod eye_state;
 pub mod exposure;
 pub mod face;
 #[cfg(feature = "onnx")]
@@ -17,7 +19,9 @@ pub mod scene;
 pub mod sharpness;
 pub mod wb;
 
-pub use aesthetic::{AestheticScorer, HeuristicAestheticScorer, NeutralAestheticStub};
+pub use aesthetic::{
+    learned_aesthetic, AestheticScorer, HeuristicAestheticScorer, NeutralAestheticStub,
+};
 pub use composition::{CompositionScorer, HeuristicCompositionScorer, NeutralCompositionStub};
 pub use face::{FaceBox, FaceDetector, FaceInfo, NoFaceDetectorStub};
 #[cfg(feature = "onnx")]
@@ -99,11 +103,12 @@ pub fn face_bonus_score(face: &FaceInfo) -> f32 {
 }
 
 /// An eye-open probability below this counts as *confidently* closed for the
-/// coverage gate. The detector's eye-open signal is an uncalibrated heuristic
-/// (Laplacian energy around an eye keypoint), so a soft or small but genuinely
-/// open eye can land in the ambiguous 0.3–0.5 band; treating that as "closed"
-/// would hard-cut the whole bonus via coverage. Only a clearly-low estimate
-/// triggers the penalty.
+/// coverage gate. The OCEC classifier is sharp (near 0 or 1), but the
+/// fallback heuristic (Laplacian energy around an eye keypoint, used when the
+/// model is unavailable or the face is tiny) is uncalibrated: a soft or small
+/// but genuinely open eye can land in the ambiguous 0.3–0.5 band, and treating
+/// that as "closed" would hard-cut the whole bonus via coverage. Only a
+/// clearly-low estimate triggers the penalty.
 const EYE_CLOSED_CONFIDENCE: f32 = 0.3;
 
 /// Like [`face_bonus_score`] but with per-face local sharpness supplied
