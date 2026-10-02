@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Download the ONNX models photo-pick needs (CLIP vision encoder + YuNet face
-# detector) into a target directory and verify their SHA-256. Used by the
+# Download the ONNX models photo-pick needs (CLIP vision encoder, YuNet face
+# detector, OCEC eye-state classifier) into a target directory and verify their SHA-256. Used by the
 # release workflow to bundle models for offline use, and usable standalone:
 #
 #   bash scripts/fetch_models.sh ./models
 #
 # The hashes here MUST match the ModelDescriptor entries in
-# crates/core/src/models/{clip.rs,scoring/face_yunet.rs}.
+# crates/core/src/{models/clip.rs,scoring/face_yunet.rs}.
 # Portable across Linux (sha256sum), macOS (shasum), and Git-Bash on Windows.
 
 set -euo pipefail
@@ -18,6 +18,7 @@ mkdir -p "$DEST"
 MODELS=(
   "clip|clip-vit-b32-vision-quantized.onnx|https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/main/onnx/vision_model_quantized.onnx|583fd1110a514667812fee7d684952aaf82a99b959760c8d7dca7e0ab9839299"
   "yunet|face_detection_yunet_2023mar.onnx|https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx|8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4"
+  "ocec|ocec_s.onnx|https://github.com/PINTO0309/OCEC/releases/download/onnx/ocec_s.onnx|9a346a08b256ad70725044cd2aa582858e108c6f45d42a9c3415afc604ba9b64"
 )
 
 verify_sha() { # expected, file -> 0 if match

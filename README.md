@@ -40,14 +40,16 @@ except the explicit VLM calls you trigger with your own key.
 | Exposure, white balance, sharpness, noise | Real |
 | Stage A burst clustering (CLIP cosine) | Real |
 | Stage B composition clustering (CLIP cosine) | Real |
-| Face detection (YuNet, opencv_zoo) | Real (bbox + 5 keypoints; eye-open / smile pending) |
-| Aesthetic score | Heuristic (luma range + hue diversity + saturation). Real CLIP-IQA pending. |
+| Face detection (YuNet, opencv_zoo) | Real (bbox + 5 keypoints; smile is a keypoint heuristic) |
+| Eye open / closed | Learned (OCEC classifier on keypoint-aligned eye crops); Laplacian heuristic fallback |
+| Aesthetic score | Learned (LAION aesthetic linear head on the CLIP embedding, weights built in); heuristic fallback without CLIP |
 | Composition score | Heuristic (Laplacian saliency + rule-of-thirds + size + edge clipping). |
 | VLM explain | Real (OpenAI-compatible + Anthropic Messages API) |
 
 ## Tech stack
 
-- **Core**: Rust 1.95, ort 2.0 (ONNX Runtime), CLIP ViT-B/32, YuNet
+- **Core**: Rust 1.95, ort 2.0 (ONNX Runtime), CLIP ViT-B/32, YuNet, OCEC,
+  LAION aesthetic predictor
 - **Server**: axum 0.7, tokio, rust-embed
 - **UI**: Vite 8 + React 19 + TypeScript + Tailwind v4 + shadcn/ui +
   sonner + lucide-react
@@ -92,8 +94,10 @@ cd ..
 cargo build --release --bin photo-pick-server
 ```
 
-The first scan downloads the CLIP and YuNet ONNX models to
-`~/.cache/photo-pick/models/` (~85MB + ~230KB, SHA-256 pinned).
+The first scan downloads the CLIP, YuNet and OCEC ONNX models to
+`~/.cache/photo-pick/models/` (~85MB + ~230KB + ~0.5MB, SHA-256 pinned).
+If the eye classifier can't be fetched, scans still run with a heuristic
+eye-open signal.
 
 ### Testing without ONNX
 

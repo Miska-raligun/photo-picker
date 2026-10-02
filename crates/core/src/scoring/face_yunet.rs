@@ -1,15 +1,20 @@
 //! YuNet face detector backend (M3.5 real implementation).
 //!
 //! YuNet is a small (~230KB) anchor-free face detector from OpenCV's model zoo
-//! (`opencv_zoo/face_detection_yunet_2023mar.onnx`, Apache 2.0). It outputs
+//! (`opencv_zoo/face_detection_yunet_2023mar.onnx`, MIT). It outputs
 //! per-stride classification, objectness, bbox, and 5-keypoint tensors at
 //! strides 8/16/32 over a 640×640 input.
 //!
-//! Eye-open / smile / local sharpness aren't computed yet — YuNet only gives
-//! bbox + 5 keypoints (eyes, nose, mouth corners). A future iteration can add:
-//! - eye-aspect-ratio from a richer landmark model, or
-//! - a dedicated eye-state classifier on the eye crop.
+//! Per-face signals derived from YuNet's bbox + 5 keypoints:
+//! - **Eye-open**: the OCEC classifier (see [`super::eye_state`]) on eye
+//!   crops aligned to the eye keypoints. Falls back to a Laplacian-energy
+//!   heuristic when the model can't load or the face is too small.
+//! - **Smile**: mouth-corner spread relative to interocular distance.
+//! - **Local sharpness**: Laplacian variance inside the face box.
 
+use super::eye_state::{
+    combine_eyes, sample_eye_patch, EyeGeometry, EYE_CROP_WIDTH_RATIO, EYE_INPUT_H, EYE_INPUT_W,
+};
 use super::face::{FaceBox, FaceDetector, FaceInfo};
 use crate::error::{Error, Result};
 use crate::models::cache::ensure_model;
@@ -29,6 +34,16 @@ pub const YUNET_FACE: ModelDescriptor = ModelDescriptor {
     size_bytes: 232_589,
 };
 
+/// OCEC "S" eye-state classifier (MIT): 24×40 RGB eye crop → P(open).
+/// ~0.5 MB, F1 0.994 on its open/closed validation set.
+pub const OCEC_EYE_STATE: ModelDescriptor = ModelDescriptor {
+    name: "ocec-eye-state-s",
+    filename: "ocec_s.onnx",
+    url: "https://github.com/PINTO0309/OCEC/releases/download/onnx/ocec_s.onnx",
+    sha256_hex: "9a346a08b256ad70725044cd2aa582858e108c6f45d42a9c3415afc604ba9b64",
+    size_bytes: 494_914,
+};
+
 const INPUT_SIZE: u32 = 640;
 const STRIDES: [u32; 3] = [8, 16, 32];
 const SCORE_THRESHOLD: f32 = 0.6;
@@ -36,6 +51,8 @@ const NMS_IOU_THRESHOLD: f32 = 0.3;
 
 pub struct YunetFaceDetector {
     sessions: SessionPool<Session>,
+    /// OCEC eye-state sessions. `None` → Laplacian eye-open heuristic.
+    eye_state: Option<SessionPool<Session>>,
 }
 
 impl YunetFaceDetector {
@@ -54,8 +71,22 @@ impl YunetFaceDetector {
         for _ in 0..n {
             sessions.push(build_session(&path, ep)?);
         }
+        // The eye classifier is an enhancement, not a requirement: if it can't
+        // be fetched (offline first run) or loaded, faces still get detected
+        // and eye-open falls back to the heuristic.
+        let eye_state = match load_eye_state_pool(ep, n) {
+            Ok(pool) => {
+                tracing::info!("OCEC eye-state classifier loaded");
+                Some(pool)
+            }
+            Err(err) => {
+                tracing::warn!(%err, "OCEC eye-state classifier unavailable; using eye-open heuristic");
+                None
+            }
+        };
         Ok(Self {
             sessions: SessionPool::new(sessions),
+            eye_state,
         })
     }
 
@@ -124,8 +155,16 @@ impl YunetFaceDetector {
         // Derive per-face signals from the projected bbox + keypoints.
         if !faces.is_empty() {
             let gray = thumb.to_luma8();
+            // Eye crops for the learned classifier, batched across all faces
+            // so the whole photo costs one inference: (face index, profile).
+            let mut eye_jobs: Vec<(usize, bool)> = Vec::new();
+            let mut eye_batch: Vec<f32> = Vec::new();
+            let rgb = self.eye_state.as_ref().map(|_| thumb.to_rgb8());
+            let to_src = |(kx, ky): (f32, f32)| {
+                ((kx - meta.pad_x as f32) / meta.scale, (ky - meta.pad_y as f32) / meta.scale)
+            };
             let (tw, th) = (gray.width(), gray.height());
-            for (f, raw) in faces.iter_mut().zip(kept.iter()) {
+            for (face_idx, (f, raw)) in faces.iter_mut().zip(kept.iter()).enumerate() {
                 // (a) bbox-local sharpness (group-normalized downstream).
                 let bx = ((f.x * tw as f32) as u32).min(tw.saturating_sub(1));
                 let by = ((f.y * th as f32) as u32).min(th.saturating_sub(1));
@@ -155,7 +194,8 @@ impl YunetFaceDetector {
                     project(raw.kps[4].0, raw.kps[4].1),
                 );
 
-                // (c) Eye-open heuristic: Laplacian variance on small luma
+                // (c) Eye-open fallback heuristic (overwritten by OCEC below
+                //     when the classifier is loaded): Laplacian variance on small luma
                 //     patches around each eye keypoint. Open eyes have far
                 //     more high-frequency detail (lashes, iris, sclera
                 //     boundary) than closed lids. tanh-normalize to [0,1]
@@ -184,6 +224,21 @@ impl YunetFaceDetector {
                     }
                 }
 
+                // (c') Queue both eyes for the OCEC classifier. Its result
+                //      replaces the heuristic above after the batch runs.
+                if let Some(rgb) = &rgb {
+                    if let Some(g) = EyeGeometry::from_keypoints(
+                        to_src(raw.kps[0]),
+                        to_src(raw.kps[1]),
+                        to_src(raw.kps[2]),
+                    ) {
+                        let width = g.interocular * EYE_CROP_WIDTH_RATIO;
+                        sample_eye_patch(rgb, g.right_eye, width, g.angle, &mut eye_batch);
+                        sample_eye_patch(rgb, g.left_eye, width, g.angle, &mut eye_batch);
+                        eye_jobs.push((face_idx, g.profile));
+                    }
+                }
+
                 // (d) Smile heuristic: mouth-corner spread normalized by
                 //     interocular distance. Neutral ≈ 0.6–0.7, smile ≈ 0.85+.
                 if let (Some((rex, rey)), Some((lex, ley)), Some((rmx, rmy)), Some((lmx, lmy))) =
@@ -205,9 +260,52 @@ impl YunetFaceDetector {
                     }
                 }
             }
+
+            if let (Some(pool), false) = (&self.eye_state, eye_jobs.is_empty()) {
+                match classify_eyes(pool, eye_batch, eye_jobs.len() * 2) {
+                    Ok(probs) => {
+                        for (k, (face_idx, profile)) in eye_jobs.iter().enumerate() {
+                            faces[*face_idx].eye_open_prob =
+                                Some(combine_eyes(probs[2 * k], probs[2 * k + 1], *profile));
+                        }
+                    }
+                    Err(err) => {
+                        tracing::warn!(%err, "eye-state inference failed; keeping heuristic");
+                    }
+                }
+            }
         }
         Ok(FaceInfo { faces })
     }
+}
+
+fn load_eye_state_pool(ep: ExecutionProvider, n: usize) -> Result<SessionPool<Session>> {
+    let path = ensure_model(&OCEC_EYE_STATE)?;
+    let sessions = (0..n.max(1))
+        .map(|_| build_session(&path, ep))
+        .collect::<Result<Vec<_>>>()?;
+    Ok(SessionPool::new(sessions))
+}
+
+/// Run OCEC over `n` stacked CHW eye patches; returns P(open) per patch.
+fn classify_eyes(pool: &SessionPool<Session>, batch: Vec<f32>, n: usize) -> Result<Vec<f32>> {
+    let arr = Array4::from_shape_vec((n, 3, EYE_INPUT_H, EYE_INPUT_W), batch)
+        .map_err(|e| Error::Config(format!("ocec input shape: {e}")))?;
+    let input =
+        Tensor::from_array(arr).map_err(|e| Error::Config(format!("ocec input: {e}")))?;
+    let probs = pool.with(|session| -> Result<Vec<f32>> {
+        let outputs = session
+            .run(ort::inputs!["images" => input])
+            .map_err(|e| Error::Config(format!("ocec inference: {e}")))?;
+        let (_, data) = outputs["prob_open"]
+            .try_extract_tensor::<f32>()
+            .map_err(|e| Error::Config(format!("ocec output: {e}")))?;
+        Ok(data.to_vec())
+    })?;
+    if probs.len() != n {
+        return Err(Error::Config(format!("ocec returned {} values for {n} eyes", probs.len())));
+    }
+    Ok(probs)
 }
 
 fn read_f32_output(
