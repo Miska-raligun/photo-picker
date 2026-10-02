@@ -1221,20 +1221,23 @@ pub async fn explain(
             .to_string();
         let kept_count = pick.kept.len();
         let total = pick.kept.len() + pick.rejected.len();
-        let entries: Vec<(String, std::path::PathBuf)> = pick
+        // Keep the full PhotoRef (real format + sha256_short) so the blocking
+        // task can hit the scan's disk thumbnail cache and, on a miss, take the
+        // cheap RAW embedded-preview path instead of a full-resolution decode.
+        let entries: Vec<(String, photo_pick_core::ingest::PhotoRef)> = pick
             .kept
             .iter()
             .chain(pick.rejected.iter())
             .filter_map(|(pid, _)| {
                 let p = rec.photos.get(pid)?;
                 let label = p.path.file_name()?.to_string_lossy().to_string();
-                Some((label, p.path.clone()))
+                Some((label, p.clone()))
             })
             .collect();
-        (scene, kept_count, total, entries)
+        (scene, kept_count, total, entries, rec.output.clone())
     };
 
-    let (scene, kept_count, total, entries) = snapshot;
+    let (scene, kept_count, _total, entries, output_dir) = snapshot;
     let provider_name = req.provider.clone();
     let vlm_override = req.vlm;
     let cache_key_for_task = cache_provider_key.clone();
@@ -1260,26 +1263,57 @@ pub async fn explain(
             },
         };
 
-        let images: Vec<VlmImage> = entries
+        // Reuse the 480px JPEGs the scan already wrote to `<output>/.thumbs`
+        // (no decode at all on a hit). Misses render in parallel on a pool
+        // bounded by the CPU count (so a big RAW group doesn't decode dozens of
+        // full frames at once), preserving attachment order. Previously every
+        // photo was decoded at full resolution, sequentially, and RAW files
+        // were forced down the JPEG decoder — they failed and were silently
+        // dropped.
+        let thumbs = photo_pick_core::output::ThumbDiskCache::new(
+            output_dir.join(".thumbs"),
+            photo_pick_core::output::DEFAULT_THUMB_LONG_EDGE,
+            photo_pick_core::output::DEFAULT_THUMB_QUALITY,
+        );
+        let prep_start = std::time::Instant::now();
+        let n_workers = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4)
+            .min(entries.len())
+            .max(1);
+        let next = std::sync::atomic::AtomicUsize::new(0);
+        let slots: Vec<std::sync::Mutex<Option<VlmImage>>> =
+            entries.iter().map(|_| std::sync::Mutex::new(None)).collect();
+        std::thread::scope(|scope| {
+            for _ in 0..n_workers {
+                scope.spawn(|| loop {
+                    let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let Some((label, photo)) = entries.get(i) else { break };
+                    match thumbs.read_or_render(photo) {
+                        Ok(jpeg_bytes) => {
+                            *slots[i].lock().unwrap() =
+                                Some(VlmImage { jpeg_bytes, label: label.clone() });
+                        }
+                        Err(e) => {
+                            tracing::warn!(path = %photo.path.display(), error = %e, "vlm explain: thumbnail failed; photo omitted");
+                        }
+                    }
+                });
+            }
+        });
+        let images: Vec<VlmImage> = slots
             .into_iter()
-            .filter_map(|(label, path)| {
-                let p = photo_pick_core::ingest::PhotoRef {
-                    id: photo_pick_core::ingest::PhotoId::new(),
-                    path,
-                    format: photo_pick_core::ingest::ImageFormat::Jpeg,
-                    captured_at: None,
-                    file_size: 0,
-                    sha256_short: [0; 16],
-                    burst_id: None,
-                    drive_mode: None,
-                    iso: None,
-                    exposure_bias_ev: None,
-                };
-                let img = decode_thumbnail_for(&p, ThumbnailSpec { long_edge: 512 }).ok()?;
-                let jpeg_bytes = encode_jpeg(&img, 80).ok()?;
-                Some(VlmImage { jpeg_bytes, label })
-            })
+            .filter_map(|s| s.into_inner().ok().flatten())
             .collect();
+        tracing::info!(
+            n_images = images.len(),
+            elapsed_ms = prep_start.elapsed().as_millis() as u64,
+            "vlm explain: images prepared"
+        );
+        if images.is_empty() {
+            return Err("no photos in this group could be loaded".into());
+        }
+        let total = images.len();
 
         let prompt = explain_group_prompt(&scene, kept_count, total, &language);
         let req = VlmRequest::new(prompt, images);
