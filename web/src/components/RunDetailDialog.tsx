@@ -2,7 +2,9 @@ import { useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { LucideIcon } from "lucide-react";
 import {
+  AlertTriangle,
   CheckCircle2,
+  ChevronDown,
   Clock,
   ClipboardCopy,
   Database,
@@ -47,6 +49,7 @@ import type {
   RunDiff,
   RunDiffEntry,
   RunRecord,
+  SkippedPhoto,
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -135,12 +138,28 @@ export function RunDetailDialog({
                 label={m.runCard.statRejected}
                 value={report.rejected_count}
               />
+              {(report.skipped_count ?? 0) > 0 && (
+                <StatPill
+                  icon={AlertTriangle}
+                  label={m.runCard.statSkipped}
+                  value={report.skipped_count ?? 0}
+                  accent="warning"
+                  title={m.runCard.statSkippedTitle}
+                />
+              )}
               <StatPill
                 icon={Clock}
                 label={m.runCard.statElapsed}
                 value={`${(report.elapsed.secs + report.elapsed.nanos / 1e9).toFixed(2)}s`}
               />
             </div>
+          )}
+
+          {report && (report.skipped_count ?? 0) > 0 && (
+            <SkippedList
+              count={report.skipped_count ?? 0}
+              items={report.skipped ?? []}
+            />
           )}
 
           {picks.length > 0 && (
@@ -335,28 +354,78 @@ function VirtualGroupStrip({
   );
 }
 
+/// Photos the pipeline couldn't read or score. They're in neither the kept nor
+/// the rejected set (so Apply never trashes them); listing them here keeps the
+/// counts honest instead of letting files silently drop out of a run.
+function SkippedList({ count, items }: { count: number; items: SkippedPhoto[] }) {
+  const m = useM();
+  const [open, setOpen] = useState(false);
+  const hidden = count - items.length;
+  return (
+    <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-xs space-y-2">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="flex w-full items-center gap-1.5 text-left font-medium text-amber-700 dark:text-amber-400"
+      >
+        <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+        <span className="flex-1">{m.runDetail.skippedTitle(count)}</span>
+        <ChevronDown
+          className={cn("h-3.5 w-3.5 shrink-0 transition-transform", open && "rotate-180")}
+        />
+      </button>
+      <p className="text-muted-foreground">{m.runDetail.skippedHint}</p>
+      {open && (
+        <ul className="max-h-48 overflow-y-auto space-y-1 font-mono">
+          {items.map((s) => (
+            <li key={s.path} className="flex gap-2 min-w-0">
+              <span className="shrink-0 rounded bg-amber-500/20 px-1 text-amber-800 dark:text-amber-300">
+                {m.runDetail.skipStage[s.stage] ?? s.stage}
+              </span>
+              <span className="min-w-0">
+                <span className="break-all">{s.path}</span>
+                <span className="text-muted-foreground"> — {s.reason}</span>
+              </span>
+            </li>
+          ))}
+          {hidden > 0 && (
+            <li className="text-muted-foreground">{m.runDetail.skippedMore(hidden)}</li>
+          )}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 function StatPill({
   icon: Icon,
   label,
   value,
   accent,
+  title,
 }: {
   icon: LucideIcon;
   label: string;
   value: string | number;
-  accent?: "success";
+  accent?: "success" | "warning";
+  title?: string;
 }) {
   return (
     <div
+      title={title}
       className={cn(
         "inline-flex items-center gap-1.5 rounded-md border bg-muted/50 px-2.5 py-1 text-xs",
-        accent === "success" && "border-[var(--success)]/40 bg-[var(--success)]/5"
+        accent === "success" && "border-[var(--success)]/40 bg-[var(--success)]/5",
+        accent === "warning" && "border-amber-500/40 bg-amber-500/10"
       )}
     >
       <Icon
         className={cn(
           "h-3.5 w-3.5",
-          accent === "success" ? "text-[var(--success)]" : "text-muted-foreground"
+          accent === "success" && "text-[var(--success)]",
+          accent === "warning" && "text-amber-600 dark:text-amber-400",
+          !accent && "text-muted-foreground"
         )}
       />
       <span className="text-muted-foreground">{label}</span>

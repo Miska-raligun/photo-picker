@@ -3,8 +3,8 @@ use crate::error::Result;
 use crate::features::{FeatureExtractor, FullExtractor, PhotoFeatures};
 use crate::group::{cluster_stage_a, cluster_stage_b, CompositionGroup, Group, StageAParams, StageBParams};
 use crate::ingest::{
-    decode_thumbnail_for, scan_files, FsScanner, PhotoId, PhotoRef, PhotoSource, Scanner,
-    ThumbnailSpec,
+    decode_thumbnail_for, scan_files_with_skips, FsScanner, PhotoId, PhotoRef, PhotoSource,
+    SkipStage, SkippedPhoto, ThumbnailSpec,
 };
 use crate::models::ExecutionProvider;
 #[cfg(feature = "onnx")]
@@ -109,6 +109,25 @@ pub struct PipelineReport {
     pub picked_count: usize,
     pub rejected_count: usize,
     pub elapsed: Duration,
+    /// Photos that couldn't be scanned, decoded or scored — they're in neither
+    /// the picked nor the rejected set. Exact count; `skipped` lists at most
+    /// [`MAX_REPORTED_SKIPS`] of them so a folder of broken files can't bloat
+    /// the run record. `#[serde(default)]` keeps runs saved by older builds
+    /// loadable.
+    #[serde(default)]
+    pub skipped_count: usize,
+    #[serde(default)]
+    pub skipped: Vec<SkippedPhoto>,
+}
+
+/// Cap on the per-photo skip list carried in [`PipelineReport`].
+pub const MAX_REPORTED_SKIPS: usize = 200;
+
+/// Outcome of extracting one photo in the parallel feature loop.
+enum Extracted {
+    Done(PhotoId, [u8; 16], PhotoFeatures),
+    Skipped(SkippedPhoto),
+    Cancelled,
 }
 
 /// Full pipeline output. The CLI cares only about `report`; the server uses
@@ -196,12 +215,9 @@ impl Pipeline {
 
         // 1. Scan
         progress.on_stage(Stage::Scan, 0);
-        let photos = match &self.cfg.source {
-            PhotoSource::Directory(root) => {
-                let scanner = FsScanner::default();
-                scanner.scan(root)?
-            }
-            PhotoSource::Files(files) => scan_files(files)?,
+        let (photos, mut skipped) = match &self.cfg.source {
+            PhotoSource::Directory(root) => FsScanner::default().scan_with_skips(root)?,
+            PhotoSource::Files(files) => scan_files_with_skips(files)?,
         };
         progress.on_finish(Stage::Scan);
         tracing::info!(count = photos.len(), "scan complete");
@@ -338,29 +354,37 @@ impl Pipeline {
                 ThumbDiskCache::new(d.clone(), DEFAULT_THUMB_LONG_EDGE, DEFAULT_THUMB_QUALITY)
             });
 
-            let pairs: Vec<(PhotoId, [u8; 16], PhotoFeatures)> = to_extract
+            let outcomes: Vec<Extracted> = to_extract
                 .par_iter()
-                .filter_map(|p| {
+                .map(|p| {
                     // Cancellation check per photo: this loop is where a large
                     // scan spends minutes, so a flag flip should stop new
                     // decode/inference work within one item's latency. Photos
                     // already extracted stay in `pairs` and get persisted to
                     // the cache below before the Cancelled error surfaces.
                     if cancel.load(Ordering::Relaxed) {
-                        return None;
+                        return Extracted::Cancelled;
                     }
                     let thumb = match decode_thumbnail_for(p, self.cfg.thumbnail) {
                         Ok(t) => t,
                         Err(err) => {
                             tracing::warn!(path = %p.path.display(), %err, "skipping (decode failed)");
-                            return None;
+                            return Extracted::Skipped(SkippedPhoto::new(
+                                &p.path,
+                                SkipStage::Decode,
+                                err,
+                            ));
                         }
                     };
                     let feat = match extractor.extract(p, &thumb) {
                         Ok(f) => f,
                         Err(err) => {
                             tracing::warn!(path = %p.path.display(), %err, "skipping (feature failed)");
-                            return None;
+                            return Extracted::Skipped(SkippedPhoto::new(
+                                &p.path,
+                                SkipStage::Features,
+                                err,
+                            ));
                         }
                     };
                     if let Some(c) = &thumb_cache {
@@ -370,10 +394,18 @@ impl Pipeline {
                     if done % tick_step == 0 || done == extract_count as u64 {
                         progress.on_tick(Stage::Features, done);
                     }
-                    Some((p.id, p.sha256_short, feat))
+                    Extracted::Done(p.id, p.sha256_short, feat)
                 })
                 .collect();
             progress.on_finish(Stage::Features);
+            let mut pairs = Vec::with_capacity(outcomes.len());
+            for o in outcomes {
+                match o {
+                    Extracted::Done(id, sha, feat) => pairs.push((id, sha, feat)),
+                    Extracted::Skipped(s) => skipped.push(s),
+                    Extracted::Cancelled => {}
+                }
+            }
             pairs
         };
 
@@ -457,7 +489,14 @@ impl Pipeline {
         // surrounding `on_stage`/`on_finish` brackets so the UI still sees a
         // Cluster phase even when the run has no timed photos.
         progress.on_stage(Stage::Cluster, 0);
-        let groups: Vec<Group> = cluster_stage_a(&photos, &features, &stage_a_params, progress);
+        // Only photos we actually analysed take part in selection. A photo
+        // that failed to decode or score (listed in `skipped`) must never be
+        // filed as rejected — in-place mode trashes rejects, and "couldn't
+        // read it" (e.g. a RAW from an unsupported camera) says nothing about
+        // whether it's a bad photo. It stays untouched in the source folder.
+        let analysed: Vec<PhotoRef> =
+            photos.iter().filter(|p| features.contains_key(&p.id)).cloned().collect();
+        let groups: Vec<Group> = cluster_stage_a(&analysed, &features, &stage_a_params, progress);
         progress.on_finish(Stage::Cluster);
         check()?;
         tracing::info!(group_count = groups.len(), "stage A complete");
@@ -587,6 +626,11 @@ impl Pipeline {
             picked_count,
             rejected_count,
             elapsed: start.elapsed(),
+            skipped_count: skipped.len(),
+            skipped: {
+                skipped.truncate(MAX_REPORTED_SKIPS);
+                skipped
+            },
         };
         Ok(PipelineOutput {
             report,
@@ -608,4 +652,52 @@ fn load_clip_pool(
         encoders.push(ClipEncoder::load(ep)?);
     }
     Ok(SessionPool::new(encoders))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use image::{DynamicImage, RgbImage};
+
+    /// A file that scans fine but can't be decoded must surface in the report,
+    /// and must not be sorted into picked/rejected (rejects get trashed in
+    /// in-place mode; an unreadable file isn't evidence of a bad photo).
+    #[test]
+    fn undecodable_photo_is_reported_as_skipped() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("photos");
+        std::fs::create_dir(&src).unwrap();
+        let img = DynamicImage::ImageRgb8(RgbImage::from_fn(64, 48, |x, y| {
+            image::Rgb([(x * 4) as u8, (y * 5) as u8, 128])
+        }));
+        img.save(src.join("good.jpg")).unwrap();
+        std::fs::write(src.join("broken.jpg"), b"definitely not a jpeg").unwrap();
+
+        let mut cfg = PipelineConfig::with_defaults(
+            PhotoSource::Directory(src.clone()),
+            dir.path().join("out"),
+        );
+        cfg.dry_run = true;
+        cfg.enable_clip = false;
+        cfg.enable_face = false;
+        cfg.thumb_cache_dir = None;
+        let out = Pipeline::new(cfg).run(&NoopProgress).unwrap();
+
+        let r = &out.report;
+        assert_eq!(r.photo_count, 2);
+        assert_eq!(r.skipped_count, 1);
+        assert_eq!(r.skipped[0].path, src.join("broken.jpg"));
+        assert_eq!(r.skipped[0].stage, SkipStage::Decode);
+        assert_eq!(r.picked_count + r.rejected_count, 1);
+    }
+
+    #[test]
+    fn report_from_older_builds_still_deserializes() {
+        let old = r#"{"photo_count":3,"cached_count":0,"extracted_count":3,
+            "stage_a_group_count":1,"stage_b_group_count":1,"picked_count":2,
+            "rejected_count":1,"elapsed":{"secs":1,"nanos":0}}"#;
+        let r: PipelineReport = serde_json::from_str(old).unwrap();
+        assert_eq!(r.skipped_count, 0);
+        assert!(r.skipped.is_empty());
+    }
 }

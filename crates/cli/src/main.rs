@@ -304,6 +304,18 @@ fn run_scan(args: ScanArgs) -> Result<()> {
         verb,
         args.output.display(),
     );
+    if report.skipped_count > 0 {
+        // These are in neither picked/ nor rejected/ — say so instead of
+        // letting the counts quietly fall short of the folder's contents.
+        eprintln!("warning: {} photo(s) skipped and not sorted:", report.skipped_count);
+        const SHOWN: usize = 10;
+        for s in report.skipped.iter().take(SHOWN) {
+            eprintln!("  [{:?}] {} — {}", s.stage, s.path.display(), s.reason);
+        }
+        if report.skipped_count > SHOWN {
+            eprintln!("  … and {} more", report.skipped_count - SHOWN);
+        }
+    }
     Ok(())
 }
 

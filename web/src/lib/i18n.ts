@@ -182,6 +182,8 @@ const enMessages = {
       statKept: "kept",
       statRejected: "rejected",
       statElapsed: "elapsed",
+      statSkipped: "skipped",
+      statSkippedTitle: "Couldn't be read or scored — not sorted, left untouched",
       openHtmlReport: "Open full HTML report",
       viewResults: "View results",
       taskDetails: "Task details",
@@ -192,6 +194,12 @@ const enMessages = {
       notifyCompleteFallback: "Scan complete.",
     },
     runDetail: {
+      skippedTitle: (n: number) =>
+        `${n} ${n === 1 ? "photo was" : "photos were"} skipped`,
+      skippedHint:
+        "These files couldn't be read or scored, so they were neither kept nor rejected. They stay untouched in the source folder — check them by hand.",
+      skippedMore: (n: number) => `…and ${n} more (see the server log)`,
+      skipStage: { scan: "read", decode: "decode", features: "scoring" },
       downloadJson: "Download JSON",
       copyHtmlPath: "Copy HTML path",
       copiedHtmlPath: "HTML report path copied",
@@ -537,6 +545,8 @@ export const messages: Record<Lang, Messages> = {
       statKept: "保留",
       statRejected: "拒绝",
       statElapsed: "耗时",
+      statSkipped: "跳过",
+      statSkippedTitle: "无法读取或评分 · 未参与筛选，原文件保持不动",
       openHtmlReport: "打开完整 HTML 报告",
       viewResults: "查看结果",
       taskDetails: "任务结果",
@@ -546,6 +556,11 @@ export const messages: Record<Lang, Messages> = {
       notifyCompleteFallback: "扫描完成。",
     },
     runDetail: {
+      skippedTitle: (n: number) => `${n} 张照片被跳过`,
+      skippedHint:
+        "这些文件无法读取或评分，既没有被保留也没有被拒绝，原文件保持不动。建议手动检查。",
+      skippedMore: (n: number) => `…还有 ${n} 张（详见服务端日志）`,
+      skipStage: { scan: "读取", decode: "解码", features: "评分" },
       downloadJson: "下载 JSON",
       copyHtmlPath: "复制 HTML 路径",
       copiedHtmlPath: "HTML 报告路径已复制",

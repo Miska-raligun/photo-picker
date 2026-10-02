@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { LucideIcon } from "lucide-react";
 import {
   AlertCircle,
+  AlertTriangle,
   ArrowRight,
   Ban,
   CheckCircle2,
@@ -249,6 +250,15 @@ export function RunCard({ run, progress, onOpenDetail }: Props) {
               label={m.runCard.statRejected}
               value={report.rejected_count}
             />
+            {(report.skipped_count ?? 0) > 0 && (
+              <StatPill
+                icon={AlertTriangle}
+                label={m.runCard.statSkipped}
+                value={report.skipped_count ?? 0}
+                accent="warning"
+                title={m.runCard.statSkippedTitle}
+              />
+            )}
             <StatPill
               icon={Clock}
               label={m.runCard.statElapsed}
@@ -288,23 +298,29 @@ function StatPill({
   label,
   value,
   accent,
+  title,
 }: {
   icon: LucideIcon;
   label: string;
   value: string | number;
-  accent?: "success";
+  accent?: "success" | "warning";
+  title?: string;
 }) {
   return (
     <div
+      title={title}
       className={cn(
         "inline-flex items-center gap-1.5 rounded-md border bg-muted/50 px-2.5 py-1 text-xs",
-        accent === "success" && "border-[var(--success)]/40 bg-[var(--success)]/5"
+        accent === "success" && "border-[var(--success)]/40 bg-[var(--success)]/5",
+        accent === "warning" && "border-amber-500/40 bg-amber-500/10"
       )}
     >
       <Icon
         className={cn(
           "h-3.5 w-3.5",
-          accent === "success" ? "text-[var(--success)]" : "text-muted-foreground"
+          accent === "success" && "text-[var(--success)]",
+          accent === "warning" && "text-amber-600 dark:text-amber-400",
+          !accent && "text-muted-foreground"
         )}
       />
       <span className="text-muted-foreground">{label}</span>

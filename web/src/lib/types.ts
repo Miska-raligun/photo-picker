@@ -37,6 +37,19 @@ export interface PipelineReport {
   picked_count: number;
   rejected_count: number;
   elapsed: { secs: number; nanos: number };
+  /** Photos that couldn't be scanned/decoded/scored — neither kept nor
+   *  rejected, left untouched. Exact count; `skipped` is capped server-side.
+   *  Optional for runs recorded by older servers. */
+  skipped_count?: number;
+  skipped?: SkippedPhoto[];
+}
+
+export type SkipStage = "scan" | "decode" | "features";
+
+export interface SkippedPhoto {
+  path: string;
+  stage: SkipStage;
+  reason: string;
 }
 
 export type RunStatus =
