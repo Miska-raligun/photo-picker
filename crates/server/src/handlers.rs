@@ -1264,32 +1264,47 @@ pub async fn explain(
         };
 
         // Reuse the 480px JPEGs the scan already wrote to `<output>/.thumbs`
-        // (no decode at all on a hit). Misses render in parallel, one thread
-        // per photo, preserving attachment order. Previously every photo was
-        // decoded at full resolution, sequentially, and RAW files were forced
-        // down the JPEG decoder — they failed and were silently dropped.
+        // (no decode at all on a hit). Misses render in parallel on a pool
+        // bounded by the CPU count (so a big RAW group doesn't decode dozens of
+        // full frames at once), preserving attachment order. Previously every
+        // photo was decoded at full resolution, sequentially, and RAW files
+        // were forced down the JPEG decoder — they failed and were silently
+        // dropped.
         let thumbs = photo_pick_core::output::ThumbDiskCache::new(
             output_dir.join(".thumbs"),
             photo_pick_core::output::DEFAULT_THUMB_LONG_EDGE,
             photo_pick_core::output::DEFAULT_THUMB_QUALITY,
         );
         let prep_start = std::time::Instant::now();
-        let images: Vec<VlmImage> = std::thread::scope(|scope| {
-            let handles: Vec<_> = entries
-                .iter()
-                .map(|(label, photo)| {
-                    let thumbs = &thumbs;
-                    scope.spawn(move || match thumbs.read_or_render(photo) {
-                        Ok(jpeg_bytes) => Some(VlmImage { jpeg_bytes, label: label.clone() }),
+        let n_workers = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4)
+            .min(entries.len())
+            .max(1);
+        let next = std::sync::atomic::AtomicUsize::new(0);
+        let slots: Vec<std::sync::Mutex<Option<VlmImage>>> =
+            entries.iter().map(|_| std::sync::Mutex::new(None)).collect();
+        std::thread::scope(|scope| {
+            for _ in 0..n_workers {
+                scope.spawn(|| loop {
+                    let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let Some((label, photo)) = entries.get(i) else { break };
+                    match thumbs.read_or_render(photo) {
+                        Ok(jpeg_bytes) => {
+                            *slots[i].lock().unwrap() =
+                                Some(VlmImage { jpeg_bytes, label: label.clone() });
+                        }
                         Err(e) => {
                             tracing::warn!(path = %photo.path.display(), error = %e, "vlm explain: thumbnail failed; photo omitted");
-                            None
                         }
-                    })
-                })
-                .collect();
-            handles.into_iter().filter_map(|h| h.join().ok().flatten()).collect()
+                    }
+                });
+            }
         });
+        let images: Vec<VlmImage> = slots
+            .into_iter()
+            .filter_map(|s| s.into_inner().ok().flatten())
+            .collect();
         tracing::info!(
             n_images = images.len(),
             elapsed_ms = prep_start.elapsed().as_millis() as u64,
