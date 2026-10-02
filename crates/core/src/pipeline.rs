@@ -16,7 +16,8 @@ use crate::output::{
     DEFAULT_THUMB_LONG_EDGE, DEFAULT_THUMB_QUALITY,
 };
 use crate::scoring::{
-    select_top_k_per_composition, select_top_k_per_group, CompositionPick, K2Policy,
+    learned_aesthetic, select_top_k_per_composition, select_top_k_per_group, CompositionPick,
+    K2Policy,
     SelectedGroup,
     TechWeights,
 };
@@ -393,6 +394,24 @@ impl Pipeline {
         // every feature it paid for — the next scan of the same folder
         // resumes from the cache instead of starting over.
         check()?;
+
+        // 2c'. Learned aesthetic from the CLIP embedding. Fresh extractions
+        //      already carry it, but cache rows written by older builds hold
+        //      the heuristic value; the embedding is cached alongside, so
+        //      recomputing here (a 512-wide dot product) upgrades them without
+        //      a schema bump or a re-decode.
+        let mut learned_aes = 0usize;
+        for f in features.values_mut() {
+            if let Some(a) = f.clip_embed.as_deref().and_then(learned_aesthetic) {
+                f.aesthetic = Some(a);
+                learned_aes += 1;
+            }
+        }
+        tracing::info!(
+            learned = learned_aes,
+            heuristic = features.len() - learned_aes,
+            "aesthetic scores assigned"
+        );
 
         // 2d. Optional adaptive-threshold bias: shifts CLIP thresholds based
         //     on the fraction of photos with a non-trivial face. Portrait

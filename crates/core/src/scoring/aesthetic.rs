@@ -1,8 +1,16 @@
-//! Aesthetic / image-quality scorer (interim heuristic — CLIP-IQA pending).
+//! Aesthetic / image-quality scoring.
 //!
-//! Until a proper CLIP-IQA pipeline lands (needs CLIP text encoder + bundled
-//! "good photo" / "bad photo" embeddings), this gives an honest non-constant
-//! signal based on three classic visual-interest proxies:
+//! **Primary: learned.** [`learned_aesthetic`] runs the LAION aesthetic
+//! predictor (a linear head trained on ~176k human ratings from the
+//! Simulacra Aesthetic Captions / LAION datasets) over the CLIP ViT-B/32 image
+//! embedding the pipeline already computes for Stage B. It's a 512-wide dot
+//! product, so it costs nothing next to the CLIP forward pass, and the 2 KB
+//! of weights are compiled in (no extra model download). The pipeline uses it
+//! whenever a photo has a CLIP embedding.
+//!
+//! **Fallback: heuristic.** [`HeuristicAestheticScorer`] is used only when CLIP
+//! is disabled or failed to load. It's an honest non-constant signal based on
+//! three classic visual-interest proxies:
 //!
 //! - **Hue diversity**: how spread across the colour wheel the image is
 //!   (entropy of a 36-bin hue histogram, weighted by saturation so pale
@@ -13,10 +21,40 @@
 //!   flat/dull or fully washed-out frames.
 //!
 //! These are **not** a learned preference model — they correlate with "snappy"
-//! photos but won't match individual taste. Use the VLM "explain" feature for
-//! actual subjective judgement until M-future swaps this for CLIP-IQA.
+//! photos but won't match individual taste.
 
+use super::aesthetic_laion_weights::{LAION_B32_BIAS, LAION_B32_WEIGHTS};
 use image::DynamicImage;
+
+/// LAION predictor output (roughly a 1–10 rating) that maps to 0.5.
+///
+/// Calibrated against OpenAI CLIP ViT-B/32 on reference photos and degraded
+/// copies of them: clean, well-made photos land around 5–7, the same frames
+/// blurred / underexposed / badly cropped drop to ~2.5–4.5, and flat
+/// documents or textures sit below 2.5. Centring the sigmoid at 4.5 with unit
+/// scale spreads that range over [0,1] (6.8 → 0.91, 5.2 → 0.67, 3.8 → 0.33,
+/// 2.5 → 0.12) instead of piling everything near one end.
+const LAION_MIDPOINT: f32 = 4.5;
+const LAION_SCALE: f32 = 1.0;
+
+/// Raw LAION aesthetic prediction (≈1–10 scale) for an L2-normalized CLIP
+/// ViT-B/32 image embedding. `None` if the embedding has the wrong width
+/// (e.g. a different CLIP variant), so callers fall back instead of scoring
+/// garbage.
+pub fn laion_aesthetic_raw(embed: &[f32]) -> Option<f32> {
+    if embed.len() != LAION_B32_WEIGHTS.len() {
+        return None;
+    }
+    let dot: f32 = embed.iter().zip(LAION_B32_WEIGHTS.iter()).map(|(e, w)| e * w).sum();
+    let raw = dot + LAION_B32_BIAS;
+    raw.is_finite().then_some(raw)
+}
+
+/// Learned aesthetic score in `[0, 1]` from a CLIP ViT-B/32 embedding.
+pub fn learned_aesthetic(embed: &[f32]) -> Option<f32> {
+    let raw = laion_aesthetic_raw(embed)?;
+    Some(1.0 / (1.0 + (-(raw - LAION_MIDPOINT) / LAION_SCALE).exp()))
+}
 
 pub trait AestheticScorer: Send + Sync {
     fn score(&self, thumb: &DynamicImage) -> f32;
@@ -195,6 +233,34 @@ mod tests {
         };
         let m = v - c;
         (r + m, g + m, b + m)
+    }
+
+    /// Reference values computed in Python from the source `.pth` tensors.
+    #[test]
+    fn laion_head_matches_reference_weights() {
+        // Unit vector e0 → weight[0] + bias.
+        let mut e0 = vec![0.0_f32; 512];
+        e0[0] = 1.0;
+        let raw = laion_aesthetic_raw(&e0).unwrap();
+        assert!((raw - (1.208_079_6 + 3.421_470_9)).abs() < 1e-4, "raw={raw}");
+
+        // Uniform unit vector → sum(weights)/sqrt(512) + bias.
+        let u = vec![1.0 / (512.0_f32).sqrt(); 512];
+        let raw = laion_aesthetic_raw(&u).unwrap();
+        assert!((raw - 3.908_14).abs() < 1e-3, "raw={raw}");
+    }
+
+    #[test]
+    fn learned_aesthetic_rejects_wrong_width_and_is_monotone() {
+        assert!(learned_aesthetic(&[0.0; 768]).is_none());
+        assert!(learned_aesthetic(&[]).is_none());
+        // Scaling an embedding along the weight direction raises the score.
+        let norm = LAION_B32_WEIGHTS.iter().map(|w| w * w).sum::<f32>().sqrt();
+        let dir: Vec<f32> = LAION_B32_WEIGHTS.iter().map(|w| w / norm).collect();
+        let anti: Vec<f32> = dir.iter().map(|x| -x).collect();
+        let hi = learned_aesthetic(&dir).unwrap();
+        let lo = learned_aesthetic(&anti).unwrap();
+        assert!(hi > 0.99 && lo < 0.01, "hi={hi} lo={lo}");
     }
 
     #[test]

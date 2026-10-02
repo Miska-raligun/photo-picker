@@ -7,6 +7,7 @@
 //! which depends on subject and lighting.
 
 pub mod aesthetic;
+mod aesthetic_laion_weights;
 pub mod composition;
 pub mod exposure;
 pub mod face;
@@ -17,7 +18,9 @@ pub mod scene;
 pub mod sharpness;
 pub mod wb;
 
-pub use aesthetic::{AestheticScorer, HeuristicAestheticScorer, NeutralAestheticStub};
+pub use aesthetic::{
+    learned_aesthetic, AestheticScorer, HeuristicAestheticScorer, NeutralAestheticStub,
+};
 pub use composition::{CompositionScorer, HeuristicCompositionScorer, NeutralCompositionStub};
 pub use face::{FaceBox, FaceDetector, FaceInfo, NoFaceDetectorStub};
 #[cfg(feature = "onnx")]
