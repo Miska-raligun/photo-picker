@@ -145,4 +145,6 @@ jobs:
           files: |
             ${{ env.TARBALL }}
             ${{ env.TARBALL }}.sha256
-          generate_release_notes: true
+          # Manual runs already generated notes in create-release; doing it
+          # again here would append them once per matrix job.
+          generate_release_notes: ${{ github.event_name != 'workflow_dispatch' }}
