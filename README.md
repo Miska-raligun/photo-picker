@@ -28,6 +28,12 @@ except the explicit VLM calls you trigger with your own key.
   - default: copies / hardlinks selected files into an output directory
   - **in-place**: leaves the source untouched until you click **Apply**
     in the UI, which sends rejected files to the OS recycle bin
+- **Star ratings for one-off shots**: selection only compares photos
+  within a group, so a trip of mostly single shots keeps everything.
+  Export with XMP sidecars and *Stars from the aesthetic score* to get
+  ★1–4 ranked against the whole run (★4 = top 15 %, flagged = ★5), then
+  filter the best of the trip in Lightroom / Capture One / digiKam.
+  (Lightroom reads `.xmp` sidecars for RAW files only.)
 - **VLM explanations** (optional): asks a chosen VLM to rank the photos
   in a group from best to worst with one-sentence reasons; the UI
   overlays per-photo rank badges and inline reasons. Independent of

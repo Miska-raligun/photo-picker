@@ -186,6 +186,8 @@ export interface ExportResult {
   target_dir: string;
   /// XMP sidecars written alongside the exported files (0 when not requested).
   xmp_written: number;
+  /** Sidecars whose rating came from the aesthetic score. Absent on older servers. */
+  xmp_scored?: number;
 }
 
 export interface DuplicatePhoto {

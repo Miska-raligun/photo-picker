@@ -331,7 +331,12 @@ const enMessages = {
       toastFailed: "Export failed",
       writeXmp: "Write XMP sidecars",
       writeXmpDesc:
-        "Drop a .xmp next to each exported photo so Lightroom / Capture One / digiKam import the results: rating 4, flagged photos 5, notes as description.",
+        "Drop a .xmp next to each exported photo so Lightroom / Capture One / digiKam import the results: flagged photos get 5 stars, notes become the description. (Lightroom reads .xmp sidecars for RAW files only.)",
+      scoreRatings: "Stars from the aesthetic score",
+      noScoresForRating:
+        "This run has no aesthetic scores (scanned without CLIP?), so sidecars got the default ★4.",
+      scoreRatingsDesc:
+        "Ranked against every scored photo in this run: ★4 top 15%, ★3 next 30%, ★2 next 35%, ★1 bottom 20% — filter ≥★4 to see the best shots of a trip. Off: every photo gets ★4.",
     },
     applyBar: {
       willDelete: "Will delete",
@@ -691,7 +696,11 @@ export const messages: Record<Lang, Messages> = {
       toastFailed: "导出失败",
       writeXmp: "同时写入 XMP 边车文件",
       writeXmpDesc:
-        "在每张导出照片旁生成 .xmp，让 Lightroom / Capture One / digiKam 直接读到结果：评级 4 星，已旗标的 5 星，备注写入说明字段。",
+        "在每张导出照片旁生成 .xmp，让 Lightroom / Capture One / digiKam 直接读到结果：已旗标的 5 星，备注写入说明字段。（Lightroom 只读取 RAW 文件的 .xmp 边车。）",
+      scoreRatings: "按美学分打星",
+      noScoresForRating: "本次任务没有美学分（扫描时可能未启用 CLIP），边车文件使用默认的 ★4。",
+      scoreRatingsDesc:
+        "与本次任务中所有已评分照片比较：前 15% ★4，其后 30% ★3，再 35% ★2，最后 20% ★1。在 Lightroom 里筛选 ≥★4 即可看到这趟旅行最好的照片。关闭则全部 ★4。",
     },
     applyBar: {
       willDelete: "即将删除",

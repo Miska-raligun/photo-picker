@@ -110,7 +110,12 @@ export const api = {
     photoIds: string[],
     targetDir: string,
     linkMode: "copy" | "hardlink" | "symlink" = "copy",
-    xmp?: { flaggedIds: string[]; notes: Record<string, string> }
+    xmp?: {
+      flaggedIds: string[];
+      notes: Record<string, string>;
+      /** Stars from the aesthetic score, ranked within the run. */
+      scoreRatings: boolean;
+    }
   ): Promise<ExportResult> {
     return request(`/api/runs/${runId}/export`, {
       method: "POST",
@@ -121,7 +126,11 @@ export const api = {
         link_mode: linkMode,
         write_xmp: !!xmp,
         ...(xmp
-          ? { flagged_ids: xmp.flaggedIds, notes: xmp.notes }
+          ? {
+              flagged_ids: xmp.flaggedIds,
+              notes: xmp.notes,
+              score_ratings: xmp.scoreRatings,
+            }
           : {}),
       }),
     });

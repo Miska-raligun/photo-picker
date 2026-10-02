@@ -377,3 +377,77 @@ async fn similar_ranks_by_clip_cosine_from_cache() {
     assert_eq!(similar[0]["photo_id"], id_near.to_string(), "near vector ranks first");
     assert!(similar[0]["similarity"].as_f64().unwrap() > similar[1]["similarity"].as_f64().unwrap());
 }
+
+/// Travel-style run: every photo is its own composition group (all kept), so
+/// the only thing separating them is the aesthetic score. With
+/// `score_ratings`, sidecar stars rank against the whole run.
+#[tokio::test]
+async fn export_rates_by_aesthetic_score_against_the_whole_run() {
+    use photo_pick_core::group::{CompositionGroup, GroupId};
+    use photo_pick_core::scoring::{CompositionPick, FinalScore, Scene};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("trip");
+    let target = tmp.path().join("exported");
+    std::fs::create_dir_all(&root).unwrap();
+
+    // Five scored singletons (best → worst) plus one photo with no score.
+    let mut photos = Vec::new();
+    for name in ["p0.jpg", "p1.jpg", "p2.jpg", "p3.jpg", "p4.jpg", "unscored.jpg"] {
+        let path = root.join(name);
+        std::fs::write(&path, name.as_bytes()).unwrap();
+        photos.push(photo_ref(path));
+    }
+    let ids: Vec<PhotoId> = photos.iter().map(|(id, _)| *id).collect();
+    let picks: Vec<CompositionPick> = [0.9_f32, 0.7, 0.5, 0.3, 0.1]
+        .iter()
+        .zip(&ids)
+        .map(|(aes, id)| CompositionPick {
+            group: CompositionGroup { id: GroupId::new(), photo_ids: vec![*id] },
+            kept: vec![(
+                *id,
+                FinalScore {
+                    scene: Scene::Mixed,
+                    tech: 0.5,
+                    aesthetic: *aes,
+                    composition: 0.5,
+                    face_bonus: 0.0,
+                    value: *aes,
+                },
+            )],
+            rejected: vec![],
+        })
+        .collect();
+
+    let state = test_state(tmp.path());
+    let run_id = insert_run(&state, root, tmp.path().join("out"), photos).await;
+    state.runs.lock().await.get_mut(&run_id).unwrap().composition_picks = picks;
+    let app = router(state);
+
+    // Export only some of them: ranks must still come from all five.
+    let export = [ids[0], ids[2], ids[4], ids[5]];
+    let (status, json) = post_json(
+        &app,
+        &format!("/api/runs/{run_id}/export"),
+        serde_json::json!({
+            "photo_ids": export.iter().map(|i| i.to_string()).collect::<Vec<_>>(),
+            "target_dir": target,
+            "write_xmp": true,
+            "score_ratings": true,
+            "flagged_ids": [ids[2].to_string()],
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["xmp_written"], 4);
+    assert_eq!(json["xmp_scored"], 2, "best + worst; flagged and unscored don't count");
+
+    let rating = |name: &str| {
+        let x = std::fs::read_to_string(target.join(name)).unwrap();
+        x.split("xmp:Rating=\"").nth(1).unwrap()[..1].to_string()
+    };
+    assert_eq!(rating("p0.xmp"), "4", "best of the run");
+    assert_eq!(rating("p4.xmp"), "1", "worst of the run");
+    assert_eq!(rating("p2.xmp"), "5", "user flag beats the score");
+    assert_eq!(rating("unscored.xmp"), "4", "no score ⇒ old fixed rating");
+}
