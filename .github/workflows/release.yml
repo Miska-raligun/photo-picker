@@ -2,7 +2,9 @@ name: release
 
 # Build self-contained bundles (binary + embedded UI + bundled models +
 # launcher) for Linux / macOS / Windows and attach them to a GitHub Release.
-# Triggers on version tags (v*) and can be run manually from the Actions tab.
+# Triggers on version tags (v*), or manually from the Actions tab with a `tag`
+# input: the manual path first creates that tag + Release at the dispatched
+# commit (useful when tags can't be pushed directly), then builds into it.
 #
 # Cross-platform works via ort's `download-binaries` feature: each runner
 # fetches the prebuilt onnxruntime *static* lib for its own target at build
@@ -14,12 +16,39 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Version tag to create and release at this commit (e.g. v0.8.0)"
+        required: true
 
 permissions:
   contents: write # create the release + upload assets
 
 jobs:
+  # Manual runs only: create the tag + Release once, before the matrix, so the
+  # three build jobs upload into one Release instead of racing to create it.
+  # Tags created with GITHUB_TOKEN don't re-trigger this workflow.
+  create-release:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create tag and release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.]+)?$ ]]; then
+            echo "tag must look like v1.2.3 (got '$TAG')" >&2
+            exit 1
+          fi
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" --title "$TAG" --generate-notes
+
   build:
+    needs: create-release
+    # Tag pushes skip create-release; still build.
+    if: ${{ !cancelled() && (needs.create-release.result == 'success' || needs.create-release.result == 'skipped') }}
     strategy:
       fail-fast: false
       matrix:
@@ -41,6 +70,8 @@ jobs:
             artifact: windows-x86_64
             bin: photo-pick-server.exe
     runs-on: ${{ matrix.os }}
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
     steps:
       - uses: actions/checkout@v4
 
@@ -98,7 +129,7 @@ jobs:
             cp packaging/run.sh staging/photo-pick/
             chmod +x staging/photo-pick/run.sh "staging/photo-pick/${{ matrix.bin }}"
           fi
-          tarball="photo-pick-${GITHUB_REF_NAME}-${{ matrix.artifact }}.tar.gz"
+          tarball="photo-pick-${RELEASE_TAG}-${{ matrix.artifact }}.tar.gz"
           tar -C staging -czf "$tarball" photo-pick
           if command -v sha256sum >/dev/null 2>&1; then
             sha256sum "$tarball" > "$tarball.sha256"
@@ -110,6 +141,7 @@ jobs:
       - name: Upload bundle to release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ env.RELEASE_TAG }}
           files: |
             ${{ env.TARBALL }}
             ${{ env.TARBALL }}.sha256
