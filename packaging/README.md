@@ -13,8 +13,9 @@ This starts a local server and opens the UI in your browser
 
 Everything is self-contained:
 - The web UI is embedded in the `photo-pick-server` binary.
-- The ONNX models (CLIP vision encoder + YuNet face detector) ship in
-  `models/` next to the binary, so the first scan works without internet.
+- The ONNX models (CLIP vision encoder, YuNet face detector, OCEC eye-state
+  classifier) ship in `models/` next to the binary, so the first scan works
+  without internet.
 
 ## Notes
 
