@@ -1,13 +1,55 @@
 use image::GrayImage;
 
 /// Plan B.3: raw multi-ROI sharpness signal.
-/// `sharpness_raw = max over ROIs of (0.6·laplacian_var + 0.4·tenengrad)`.
+/// `sharpness_raw = max over ROIs of (0.6·laplacian_var + 0.4·tenengrad)`,
+/// measured on a noise-suppressed copy of the frame (see below).
 ///
 /// M2 uses a 3×3 grid of patches (no face/AF data yet). The pipeline normalizes
 /// across photos *within a group* via z-score → sigmoid in [`finalize_group`].
 ///
+/// **Noise robustness.** Laplacian variance and gradient magnitude respond to
+/// sensor noise exactly like they respond to fine detail, so measured on the
+/// raw thumbnail a noisier frame of a burst read as *sharper* and won. Two
+/// countermeasures, both cheap:
+/// 1. measure on a 2×2 box-downsampled copy — pixel noise variance drops 4×
+///    while real edges (which span several pixels) survive;
+/// 2. subtract the residual noise floor, estimated from the flattest patches
+///    of that copy, from both terms (for i.i.d. noise of σ the 4-neighbour
+///    Laplacian has variance 20σ², and each Sobel axis 12σ²).
+///
 /// [`finalize_group`]: super::finalize_group
 pub fn raw(gray: &GrayImage) -> f32 {
+    if gray.width() >= 128 && gray.height() >= 128 {
+        let half = downsample_2x(gray);
+        let sigma = super::noise::estimate_noise_sigma(&half);
+        raw_inner(&half, sigma)
+    } else {
+        raw_inner(gray, 0.0)
+    }
+}
+
+/// 2×2 box downsample (odd trailing row/column dropped).
+fn downsample_2x(gray: &GrayImage) -> GrayImage {
+    let (w, h) = (gray.width() / 2, gray.height() / 2);
+    let src = gray.as_raw();
+    let stride = gray.width() as usize;
+    let mut out = Vec::with_capacity((w * h) as usize);
+    for y in 0..h as usize {
+        let r0 = 2 * y * stride;
+        let r1 = r0 + stride;
+        for x in 0..w as usize {
+            let c = 2 * x;
+            let sum = src[r0 + c] as u16 + src[r0 + c + 1] as u16 + src[r1 + c] as u16
+                + src[r1 + c + 1] as u16;
+            out.push(((sum + 2) / 4) as u8);
+        }
+    }
+    GrayImage::from_raw(w, h, out).expect("buffer matches dimensions")
+}
+
+fn raw_inner(gray: &GrayImage, noise_sigma: f32) -> f32 {
+    let lap_floor = 20.0 * noise_sigma * noise_sigma;
+    let grad_floor = 24.0 * noise_sigma * noise_sigma;
     let (w, h) = (gray.width(), gray.height());
     // Clamp the ROI to the image itself: for inputs whose short edge is
     // under 64px the previous `max(64)` produced a window larger than the
@@ -45,6 +87,10 @@ pub fn raw(gray: &GrayImage) -> f32 {
             .min(h.saturating_sub(roi_size).max(0));
         let lv = laplacian_variance_window(buf, stride, x as usize, y as usize, roi_size as usize);
         let tg = tenengrad_window(buf, stride, x as usize, y as usize, roi_size as usize);
+        let lv = (lv - lap_floor).max(0.0);
+        // tenengrad is a mean magnitude; remove the noise share in the
+        // squared domain where independent contributions add.
+        let tg = (tg * tg - grad_floor).max(0.0).sqrt();
         let s = 0.6 * lv + 0.4 * tg;
         if s > best {
             best = s;

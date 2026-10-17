@@ -15,7 +15,7 @@ pub fn score(gray: &GrayImage, iso: Option<u32>) -> f32 {
 }
 
 /// Returns an estimate of per-pixel noise sigma in luma units (0..255).
-fn estimate_noise_sigma(gray: &GrayImage) -> f32 {
+pub(crate) fn estimate_noise_sigma(gray: &GrayImage) -> f32 {
     let (w, h) = (gray.width(), gray.height());
     let patch: u32 = 8;
     if w < patch || h < patch {

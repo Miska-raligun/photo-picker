@@ -20,7 +20,8 @@ pub mod sharpness;
 pub mod wb;
 
 pub use aesthetic::{
-    learned_aesthetic, AestheticScorer, HeuristicAestheticScorer, NeutralAestheticStub,
+    laion_raw_to_unit, learned_aesthetic, AestheticScorer, HeuristicAestheticScorer,
+    NeutralAestheticStub,
 };
 pub use composition::{CompositionScorer, HeuristicCompositionScorer, NeutralCompositionStub};
 pub use face::{FaceBox, FaceDetector, FaceInfo, NoFaceDetectorStub};
@@ -221,7 +222,7 @@ pub fn finalize_group(
         .map(|(_, r)| (r.sharpness_raw - mu).powi(2))
         .sum::<f32>()
         / n_f;
-    let sigma = var.sqrt().max(1e-6);
+    let sigma = norm_sigma(var.sqrt(), mu);
 
     raw_per_photo
         .iter()
@@ -249,6 +250,20 @@ pub fn finalize_group(
 
 fn sigmoid(x: f32) -> f32 {
     1.0 / (1.0 + (-x).exp())
+}
+
+/// Smallest spread, as a fraction of the group mean, that within-group
+/// normalization will assume. Burst frames are often equally sharp; their
+/// sharpness values then differ by a few percent of pure measurement noise,
+/// and a bare z-score would stretch that into a 0.27-vs-0.73 split that
+/// decides the pick. With this floor a 3 % difference stays a ~0.05 nudge,
+/// while a genuinely blurred frame (typically 50 %+ lower) still drops hard.
+const RELATIVE_SIGMA_FLOOR: f32 = 0.15;
+
+/// Spread used for within-group z-scores: the observed standard deviation,
+/// but never less than [`RELATIVE_SIGMA_FLOOR`] of the mean.
+fn norm_sigma(std: f32, mean: f32) -> f32 {
+    std.max(RELATIVE_SIGMA_FLOOR * mean.abs()).max(1e-6)
 }
 
 /// z-score → sigmoid normalization of `x` against a population `(mu, sigma)`.
@@ -282,7 +297,7 @@ pub fn score_group_final(
     let mu = members.iter().map(|(_, r, ..)| r.sharpness_raw).sum::<f32>() / n_f;
     let var =
         members.iter().map(|(_, r, ..)| (r.sharpness_raw - mu).powi(2)).sum::<f32>() / n_f;
-    let sigma = var.sqrt().max(1e-6);
+    let sigma = norm_sigma(var.sqrt(), mu);
 
     // Per-face local sharpness: pool every face's raw Laplacian variance across
     // the whole group and normalize that pool. Raw variance is unbounded, so
@@ -294,7 +309,7 @@ pub fn score_group_final(
     let face_norm = if pool.len() >= 2 {
         let m = pool.iter().sum::<f32>() / pool.len() as f32;
         let v = pool.iter().map(|x| (x - m).powi(2)).sum::<f32>() / pool.len() as f32;
-        Some((m, v.sqrt().max(1e-6)))
+        Some((m, norm_sigma(v.sqrt(), m)))
     } else {
         None
     };
@@ -607,6 +622,93 @@ mod tests {
             scored[&soft_open].1.value > scored[&sharp_closed].1.value,
             "open-eyes frame should win despite lower sharpness"
         );
+    }
+
+    /// Procedural stand-in for a photo: smooth sky gradient, hard-edged shapes
+    /// and fine texture on the ground, and a small blown highlight (~3 %).
+    fn synthetic_photo() -> DynamicImage {
+        let (w, h) = (1024u32, 768u32);
+        DynamicImage::ImageRgb8(image::RgbImage::from_fn(w, h, |x, y| {
+            let (fx, fy) = (x as f32 / w as f32, y as f32 / h as f32);
+            let mut v = 60.0 + 120.0 * (1.0 - fy);
+            if ((x / 96) + (y / 96)) % 2 == 0 && fy > 0.45 {
+                v -= 45.0;
+            }
+            if fy > 0.45 {
+                // Textured "ground"; the sky above stays smooth, as in most
+                // real frames (the noise estimator reads the flattest patches).
+                v += 18.0 * ((x as f32 * 0.9).sin() * (y as f32 * 0.7).cos());
+            }
+            let (dx, dy) = (fx - 0.72, fy - 0.2);
+            if dx * dx + dy * dy < 0.012 {
+                v = 255.0;
+            }
+            let v = v.clamp(0.0, 255.0);
+            image::Rgb([v as u8, (v * 0.95) as u8, (v * 0.85) as u8])
+        }))
+    }
+
+    fn degrade(img: &DynamicImage, f: impl Fn(u32, u32, f32) -> f32) -> DynamicImage {
+        let rgb = img.to_rgb8();
+        DynamicImage::ImageRgb8(image::RgbImage::from_fn(rgb.width(), rgb.height(), |x, y| {
+            let p = rgb.get_pixel(x, y).0;
+            image::Rgb(p.map(|c| f(x, y, c as f32).clamp(0.0, 255.0) as u8))
+        }))
+    }
+
+    /// End-to-end on the tech signals: in a "burst" of the same frame, the
+    /// clean original must outrank noisy, darker and softer copies. Before the
+    /// noise-robust sharpness and graded clipping fixes, the noisy copy read
+    /// as sharpest and the darkened copy as best exposed.
+    #[test]
+    fn clean_frame_beats_noisy_dark_and_soft_copies() {
+        let photo = PhotoRef {
+            id: PhotoId::new(),
+            path: "x.jpg".into(),
+            format: crate::ingest::ImageFormat::Jpeg,
+            captured_at: None,
+            file_size: 0,
+            sha256_short: [0; 16],
+            burst_id: None,
+            drive_mode: None,
+            iso: None,
+            exposure_bias_ev: None,
+        };
+        let clean = synthetic_photo();
+        // Deterministic pseudo-noise, σ≈12.
+        let noisy = degrade(&clean, |x, y, c| {
+            let h = (x.wrapping_mul(73_856_093) ^ y.wrapping_mul(19_349_663)) % 1000;
+            c + (h as f32 / 1000.0 - 0.5) * 41.0
+        });
+        let dark = degrade(&clean, |_, _, c| c * 0.6);
+        let soft = image::DynamicImage::ImageRgb8(image::imageops::blur(&clean.to_rgb8(), 1.6));
+
+        let frames = [("clean", clean), ("noisy", noisy), ("dark", dark), ("soft", soft)];
+        let ids: Vec<PhotoId> = frames.iter().map(|_| PhotoId::new()).collect();
+        let members: Vec<GroupMember> = frames
+            .iter()
+            .zip(&ids)
+            .map(|((_, img), id)| (*id, compute_raw_scores(img, &photo), 0.5, 0.5, FaceInfo::default()))
+            .collect();
+        let scored = score_group_final(&members, &TechWeights::default());
+        let clean_v = scored[&ids[0]].1.value;
+        for (i, (name, _)) in frames.iter().enumerate().skip(1) {
+            let v = scored[&ids[i]].1.value;
+            assert!(clean_v > v + 0.01, "clean={clean_v:.3} should beat {name}={v:.3}");
+        }
+    }
+
+    #[test]
+    fn near_equal_sharpness_is_not_amplified_into_a_big_gap() {
+        // Two equally-sharp burst frames whose measurements differ by 3 %.
+        let (a, b) = (PhotoId::new(), PhotoId::new());
+        let m = finalize_group(&[(a, raw(100.0)), (b, raw(103.0))], &TechWeights::default());
+        let gap = m[&b].sharpness - m[&a].sharpness;
+        assert!(gap > 0.0 && gap < 0.1, "3 % difference became a {gap} gap");
+        // A clearly blurred frame still separates strongly.
+        let (s, blur) = (PhotoId::new(), PhotoId::new());
+        let m = finalize_group(&[(s, raw(100.0)), (blur, raw(40.0))], &TechWeights::default());
+        assert!(m[&s].sharpness - m[&blur].sharpness > 0.4);
     }
 
     #[test]

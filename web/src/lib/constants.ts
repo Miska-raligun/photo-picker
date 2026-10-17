@@ -14,7 +14,7 @@ export type SceneWeights = {
 };
 
 export const SCENE_WEIGHTS: Record<string, SceneWeights> = {
-  portrait: { tech: 0.30, aesthetic: 0.20, composition: 0.15, face_bonus: 0.35 },
-  landscape: { tech: 0.35, aesthetic: 0.40, composition: 0.25, face_bonus: 0.00 },
-  mixed: { tech: 0.32, aesthetic: 0.30, composition: 0.20, face_bonus: 0.18 },
+  portrait: { tech: 0.30, aesthetic: 0.25, composition: 0.10, face_bonus: 0.35 },
+  landscape: { tech: 0.35, aesthetic: 0.55, composition: 0.10, face_bonus: 0.00 },
+  mixed: { tech: 0.32, aesthetic: 0.40, composition: 0.10, face_bonus: 0.18 },
 };

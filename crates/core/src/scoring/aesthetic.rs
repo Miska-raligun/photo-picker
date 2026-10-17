@@ -26,16 +26,19 @@
 use super::aesthetic_laion_weights::{LAION_B32_BIAS, LAION_B32_WEIGHTS};
 use image::DynamicImage;
 
-/// LAION predictor output (roughly a 1–10 rating) that maps to 0.5.
+/// LAION predictor outputs (roughly a 1–10 rating) mapped to 0 and 1.
 ///
 /// Calibrated against OpenAI CLIP ViT-B/32 on reference photos and degraded
 /// copies of them: clean, well-made photos land around 5–7, the same frames
 /// blurred / underexposed / badly cropped drop to ~2.5–4.5, and flat
-/// documents or textures sit below 2.5. Centring the sigmoid at 4.5 with unit
-/// scale spreads that range over [0,1] (6.8 → 0.91, 5.2 → 0.67, 3.8 → 0.33,
-/// 2.5 → 0.12) instead of piling everything near one end.
-const LAION_MIDPOINT: f32 = 4.5;
-const LAION_SCALE: f32 = 1.0;
+/// documents or textures sit below 2.5.
+///
+/// The mapping is linear on purpose. An earlier sigmoid centred at 4.5
+/// squeezed every good photo into 0.91–0.93, so within a group of good shots
+/// the score barely moved and noise in the other signals decided the pick.
+/// Linear keeps a 0.5-point LAION difference worth the same everywhere.
+const LAION_FLOOR: f32 = 2.0;
+const LAION_CEIL: f32 = 8.0;
 
 /// Raw LAION aesthetic prediction (≈1–10 scale) for an L2-normalized CLIP
 /// ViT-B/32 image embedding. `None` if the embedding has the wrong width
@@ -52,8 +55,12 @@ pub fn laion_aesthetic_raw(embed: &[f32]) -> Option<f32> {
 
 /// Learned aesthetic score in `[0, 1]` from a CLIP ViT-B/32 embedding.
 pub fn learned_aesthetic(embed: &[f32]) -> Option<f32> {
-    let raw = laion_aesthetic_raw(embed)?;
-    Some(1.0 / (1.0 + (-(raw - LAION_MIDPOINT) / LAION_SCALE).exp()))
+    laion_aesthetic_raw(embed).map(laion_raw_to_unit)
+}
+
+/// Map a raw LAION prediction onto `[0, 1]` (see [`LAION_FLOOR`]).
+pub fn laion_raw_to_unit(raw: f32) -> f32 {
+    ((raw - LAION_FLOOR) / (LAION_CEIL - LAION_FLOOR)).clamp(0.0, 1.0)
 }
 
 pub trait AestheticScorer: Send + Sync {
