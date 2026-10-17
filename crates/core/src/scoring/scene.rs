@@ -46,24 +46,30 @@ pub struct FinalWeights {
 }
 
 impl FinalWeights {
+    /// Composition carries only 0.10 everywhere: the heuristic composition
+    /// scorer locates the "subject" from Laplacian hot spots, so motion blur or
+    /// noise between two frames of the same shot can swing it from 0.24 to
+    /// 0.59 and flip the pick on its own. The freed weight goes to the learned
+    /// aesthetic score, which already reflects framing as people judge it.
+    /// Keep `web/src/lib/constants.ts` (SCENE_WEIGHTS) in sync.
     pub fn for_scene(s: Scene) -> Self {
         match s {
             Scene::Portrait => Self {
                 tech: 0.30,
-                aesthetic: 0.20,
-                composition: 0.15,
+                aesthetic: 0.25,
+                composition: 0.10,
                 face_bonus: 0.35,
             },
             Scene::Landscape => Self {
                 tech: 0.35,
-                aesthetic: 0.40,
-                composition: 0.25,
+                aesthetic: 0.55,
+                composition: 0.10,
                 face_bonus: 0.00,
             },
             Scene::Mixed => Self {
                 tech: 0.32,
-                aesthetic: 0.30,
-                composition: 0.20,
+                aesthetic: 0.40,
+                composition: 0.10,
                 face_bonus: 0.18,
             },
         }

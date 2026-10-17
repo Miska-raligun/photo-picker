@@ -22,7 +22,9 @@ use std::path::Path;
 /// - v3: real composition + aesthetic heuristics replace 0.5 stubs
 /// - v4: EXIF orientation applied at decode — thumbnails (hence all derived
 ///   features) differ for rotated shots, so old rows must be re-extracted
-pub const FEATURE_SCHEMA_VERSION: i64 = 4;
+/// - v5: noise-robust sharpness and graded exposure clipping change the
+///   cached `sharpness_raw` / `exposure` values
+pub const FEATURE_SCHEMA_VERSION: i64 = 5;
 
 pub struct CacheStore {
     conn: Connection,
