@@ -52,8 +52,8 @@ function presetContents(p: StylePreset, t: ReturnType<typeof useM>["stylePreset"
 }
 
 /// Style extraction: a standalone tool next to scanning. Pick reference
-/// photos with the look you want and the photos to restyle; get a Lightroom
-/// preset and/or 3D LUT. When a reference is an edit of one of the photos to
+/// photos with the look you want and, optionally, the photos to restyle; get
+/// a Lightroom preset and/or 3D LUT. When a reference is an edit of one of the photos to
 /// restyle, the server pairs them for a precise fit; otherwise it falls back
 /// to a rough, content-independent fit, and the result says which happened.
 export function StyleStudio() {
@@ -278,7 +278,7 @@ export function StyleStudio() {
           <div className="flex flex-wrap justify-end gap-2">
             <Button
               onClick={generate}
-              disabled={busy || refs.length === 0 || !hasTargets || formats.length === 0}
+              disabled={busy || refs.length === 0 || formats.length === 0}
             >
               {busy && <Loader2 className="h-4 w-4 animate-spin" />}
               {result ? t.regenerate : t.generate}
@@ -298,12 +298,16 @@ export function StyleStudio() {
               <p className="text-xs text-muted-foreground">
                 {result.mode === "paired"
                   ? t.pairedExplain(result.references_used)
-                  : t.unpairedExplain}
+                  : result.targets_total === 0
+                    ? t.noTargets
+                    : t.unpairedExplain}
               </p>
             </div>
-            <p className="text-xs text-muted-foreground">
-              {t.targetsRead(result.targets_read, result.targets_total)}
-            </p>
+            {result.targets_total > 0 && (
+              <p className="text-xs text-muted-foreground">
+                {t.targetsRead(result.targets_read, result.targets_total)}
+              </p>
+            )}
             <div className="flex flex-wrap items-center gap-1.5 text-xs">
               <span className="text-muted-foreground">{t.contains}:</span>
               {presetContents(result.preset, t).map((c) => (

@@ -322,11 +322,13 @@ const enMessages = {
       references: "Reference photos (the look you want)",
       addReferences: "Add photos…",
       referencesHint:
-        "Best: a few photos from the set below that you've already edited (export them as JPEG) — they're matched to their originals for a precise preset. Unrelated photos work too, but only roughly.",
-      targets: "Photos to restyle",
+        "Best: a few photos you've already edited (export them as JPEG), with their originals added below — they're matched for a precise preset. Unrelated photos work too, but only roughly.",
+      targets: "Photos to restyle (optional)",
       chooseTargets: "Choose folder or photos…",
       targetsHint:
-        "The photos you want to give this look. Open a folder and confirm without ticking anything to use the whole folder (subfolders included), or tick individual photos.",
+        "Optional — skip it to just extract the style file. Adding the photos you'll use it on (or the originals of edited references) makes the preset more accurate and shows a preview. Open a folder and confirm without ticking anything to use the whole folder (subfolders included), or tick individual photos.",
+      noTargets:
+        "Learned from the references alone, so only content-independent traits: faded blacks / soft highlights and the shadow-vs-highlight colour split. Contrast is left unchanged (there are no photos to compare it with) and there's no preview. For a precise preset, add the originals of edited references as photos to restyle.",
       targetsRead: (read: number, total: number) =>
         read === total
           ? `Read ${read} photo${read === 1 ? "" : "s"} to restyle.`
@@ -757,11 +759,13 @@ export const messages: Record<Lang, Messages> = {
       references: "样例照片（想要的风格）",
       addReferences: "添加照片…",
       referencesHint:
-        "最好选下面这组照片中你已经修好的几张（导出为 JPEG），程序会找到它们的原片，生成精确的预设。不相关的照片也可以，但只能学到大致风格。",
-      targets: "要调色的照片",
+        "最好选你已经修好的几张照片（导出为 JPEG），并在下面加入它们的原片，程序会自动配对，生成精确的预设。不相关的照片也可以，但只能学到大致风格。",
+      targets: "要调色的照片（可选）",
       chooseTargets: "选择文件夹或照片…",
       targetsHint:
-        "想要套用这种风格的照片。打开文件夹后不勾选直接确认，就使用整个文件夹（包括子文件夹）；也可以勾选具体照片。",
+        "可选。只想提取风格文件可以不选。加入要套用的照片（或样例的修图前原片）能让预设更准，并显示预览。打开文件夹后不勾选直接确认，就使用整个文件夹（包括子文件夹）；也可以勾选具体照片。",
+      noTargets:
+        "只根据样例学习，所以只学到与画面内容无关的部分：黑位/高光的褪色，以及阴影与高光的冷暖差异。没有可对比的照片，所以不调整对比度，也没有预览。想要精确的预设，可以把样例修图前的原片加到“要调色的照片”里。",
       targetsRead: (read: number, total: number) =>
         read === total
           ? `已读取 ${read} 张要调色的照片。`

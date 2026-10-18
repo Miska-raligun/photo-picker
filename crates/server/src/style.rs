@@ -1,8 +1,10 @@
 //! Style extraction endpoints — a standalone tool, independent of scan runs.
 //!
-//! `POST /api/style/preset` learns a look from *reference* photos and fits it
-//! against a set of *target* photos (the ones the user wants to restyle),
-//! returning a Lightroom preset and/or 3D LUT. `POST /api/style/preview`
+//! `POST /api/style/preset` learns a look from *reference* photos, optionally
+//! fitting it against a set of *target* photos (the ones the user wants to
+//! restyle), and returns a Lightroom preset and/or 3D LUT. Targets are
+//! optional — without them only the content-independent (unpaired) fit is
+//! possible, and there are no previews. `POST /api/style/preview`
 //! renders a target photo before / after (approximately) applying a preset.
 //!
 //! References that are edited versions of target photos are paired with their
@@ -44,7 +46,7 @@ const PREVIEW_COUNT: usize = 4;
 pub struct StylePresetRequest {
     /// Photos whose look to learn.
     pub reference_paths: Vec<PathBuf>,
-    /// Photos to restyle, as individual files…
+    /// Photos to restyle (optional), as individual files…
     #[serde(default)]
     pub target_paths: Vec<PathBuf>,
     /// …and/or a folder of them (walked recursively, hidden entries skipped).
@@ -94,7 +96,8 @@ pub struct StylePresetResponse {
     pub references_unpaired: Vec<PathBuf>,
     /// References that couldn't be read at all.
     pub references_failed: Vec<ReferenceIssue>,
-    /// Target photos found, and how many of them were actually read.
+    /// Target photos found, and how many of them were actually read (both 0
+    /// when none were given).
     pub targets_total: usize,
     pub targets_read: usize,
     /// Photos the fit compared against (originals, or the baseline sample).
@@ -142,9 +145,6 @@ pub async fn style_preset(Json(req): Json<StylePresetRequest>) -> Response {
     if req.reference_paths.len() > MAX_REFERENCES {
         return bad_request(format!("at most {MAX_REFERENCES} reference photos"));
     }
-    if req.target_paths.is_empty() && req.target_dir.is_none() {
-        return bad_request("pick the photos to restyle (a folder or files)");
-    }
     let mut seen = std::collections::HashSet::new();
     let formats: Vec<StyleFormat> = req.formats.iter().copied().filter(|f| seen.insert(*f)).collect();
     if formats.is_empty() {
@@ -166,6 +166,7 @@ pub async fn style_preset(Json(req): Json<StylePresetRequest>) -> Response {
     let strength = req.strength.unwrap_or(1.0).clamp(0.0, 1.0);
 
     let result = tokio::task::spawn_blocking(move || {
+        let given = !req.target_paths.is_empty() || req.target_dir.is_some();
         let mut targets: Vec<PathBuf> = req.target_paths.clone();
         if let Some(dir) = &req.target_dir {
             if !dir.is_dir() {
@@ -173,7 +174,7 @@ pub async fn style_preset(Json(req): Json<StylePresetRequest>) -> Response {
             }
             list_photos(dir, &mut targets);
         }
-        fit_style(&name, strength, &formats, &req.reference_paths, targets)
+        fit_style(&name, strength, &formats, &req.reference_paths, given.then_some(targets))
     })
     .await;
     match result {
@@ -277,9 +278,10 @@ fn fit_style(
     strength: f32,
     formats: &[StyleFormat],
     reference_paths: &[PathBuf],
-    targets: Vec<PathBuf>,
+    targets: Option<Vec<PathBuf>>,
 ) -> Result<StylePresetResponse, String> {
     let hasher = HashOnlyExtractor::new();
+    let mut targets_total = 0usize;
 
     let mut failed = Vec::new();
     let mut refs: Vec<Loaded> = Vec::new();
@@ -293,17 +295,24 @@ fn fit_style(
         return Err("none of the reference photos could be read".into());
     }
 
-    // Targets, minus the references themselves (they may sit in the same folder).
-    let targets: Vec<PathBuf> = targets.into_iter().filter(|t| !reference_paths.contains(t)).collect();
-    let targets_total = targets.len();
-    if targets_total == 0 {
-        return Err("no photos to restyle were found (besides the references)".into());
-    }
-    let chosen = choose_targets(targets, reference_paths, MAX_TARGETS);
-    let run = load_parallel(&chosen, &hasher);
-    if run.is_empty() {
-        return Err("none of the photos to restyle could be read".into());
-    }
+    // Targets, minus the references themselves (they may sit in the same
+    // folder). None given → just the style file, from the references alone.
+    let run: Vec<Loaded> = match targets {
+        None => Vec::new(),
+        Some(targets) => {
+            let targets: Vec<PathBuf> = targets.into_iter().filter(|t| !reference_paths.contains(t)).collect();
+            if targets.is_empty() {
+                return Err("no photos to restyle were found (besides the references)".into());
+            }
+            let total = targets.len();
+            let run = load_parallel(&choose_targets(targets, reference_paths, MAX_TARGETS), &hasher);
+            if run.is_empty() {
+                return Err("none of the photos to restyle could be read".into());
+            }
+            targets_total = total;
+            run
+        }
+    };
 
     // Pair each reference with its nearest target.
     let mut edited = StyleStats::new();
@@ -337,14 +346,15 @@ fn fit_style(
         let mut baseline = StyleStats::new();
         let step = (run.len() / MAX_BASELINE).max(1);
         run.iter().step_by(step).for_each(|l| baseline.add_image(&l.img));
-        let p = StylePreset::fit_unpaired(name, &reference, &baseline, strength).map_err(|e| e.to_string())?;
-        (p, FitMode::Unpaired, refs.len(), baseline.image_count(), Vec::new())
+        let baseline = (baseline.image_count() > 0).then_some(&baseline);
+        let p = StylePreset::fit_unpaired(name, &reference, baseline, strength).map_err(|e| e.to_string())?;
+        (p, FitMode::Unpaired, refs.len(), baseline.map_or(0, |b| b.image_count()), Vec::new())
     };
 
     // Previews: photos the preset will actually be used on — skip the ones
     // that already have an edit (paired originals), spread across the set.
     let pool: Vec<&Loaded> = run.iter().filter(|l| !paired_paths.contains(&l.path.as_path())).collect();
-    let pool = if pool.is_empty() { run.iter().collect() } else { pool };
+    let pool: Vec<&Loaded> = if pool.is_empty() { run.iter().collect() } else { pool };
     let step = (pool.len() / PREVIEW_COUNT).max(1);
     let preview_paths = pool.iter().step_by(step).take(PREVIEW_COUNT).map(|l| l.path.clone()).collect();
 

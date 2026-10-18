@@ -638,11 +638,28 @@ async fn style_preset_falls_back_to_unpaired_and_reports_bad_references() {
         let app = app.clone();
         async move { post_json(&app, "/api/style/preset", body).await.0 }
     };
-    // No formats, no references, no targets, nothing readable → 400.
+    // No formats, no references, nothing readable, an empty target folder → 400.
     assert_eq!(bad(serde_json::json!({ "reference_paths": [other], "target_dir": dir, "formats": [] })).await, StatusCode::BAD_REQUEST);
     assert_eq!(bad(serde_json::json!({ "reference_paths": [], "target_dir": dir })).await, StatusCode::BAD_REQUEST);
-    assert_eq!(bad(serde_json::json!({ "reference_paths": [other] })).await, StatusCode::BAD_REQUEST);
     assert_eq!(bad(serde_json::json!({ "reference_paths": [junk], "target_dir": dir })).await, StatusCode::BAD_REQUEST);
+    let empty = tmp.path().join("empty");
+    std::fs::create_dir_all(&empty).unwrap();
+    assert_eq!(bad(serde_json::json!({ "reference_paths": [other], "target_dir": empty })).await, StatusCode::BAD_REQUEST);
+
+    // Photos to restyle are optional: just extract the style file.
+    let (status, json) = post_json(
+        &app,
+        "/api/style/preset",
+        serde_json::json!({ "reference_paths": [other], "formats": ["lr_preset", "cube_lut"] }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["mode"], "unpaired");
+    assert_eq!(json["references_used"], 1);
+    assert_eq!(json["targets_total"], 0);
+    assert_eq!(json["baseline_count"], 0);
+    assert_eq!(json["preview_paths"].as_array().unwrap().len(), 0);
+    assert_eq!(json["files"].as_array().unwrap().len(), 2);
     std::env::remove_var("PHOTO_PICK_BROWSE_ROOTS");
 }
 
