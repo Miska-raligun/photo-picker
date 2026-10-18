@@ -35,15 +35,16 @@ except the explicit VLM calls you trigger with your own key.
   filter the best of the trip in Lightroom / Capture One / digiKam.
   (Lightroom reads `.xmp` sidecars for RAW files only.)
 - **Style extraction** (its own tab, independent of scanning): pick
-  reference photos with a look you like and the photos to restyle (a folder
-  or files); download the look as a Lightroom / Camera Raw preset (`.xmp`:
+  reference photos with a look you like and, optionally, the photos to
+  restyle (a folder or files); download the look as a Lightroom / Camera Raw preset (`.xmp`:
   tone curve, RGB curves, saturation, HSL, colour grading) and/or a 3D LUT
   (`.cube`, for Photoshop, Affinity, Resolve, Capture One, darktable…) to
   apply by hand. Best with a few of those photos you've already edited —
   they're matched to their originals and the edit is learned precisely,
   including per-colour (HSL) changes when the edit isn't cropped. Unrelated
   reference photos give only a rough approximation (fade, contrast, split
-  toning).
+  toning). Without photos to restyle you still get the file — from the
+  references alone, with no contrast change and no preview.
   The page shows an approximate before/after first.
 - **VLM explanations** (optional): asks a chosen VLM to rank the photos
   in a group from best to worst with one-sentence reasons; the UI

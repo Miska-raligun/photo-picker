@@ -522,14 +522,24 @@ impl StylePreset {
     }
 
     /// Unpaired fit from unrelated reference photos; see the module docs for
-    /// what is (and deliberately isn't) transferred.
+    /// what is (and deliberately isn't) transferred. `baseline` is the photos
+    /// the preset is meant for; without them (`None`, the user only wants
+    /// the style file) fades are judged against typical black / white levels
+    /// and contrast is left alone — ungraded photos vary too much in tonal
+    /// shape for a single typical value to tell a contrast grade from
+    /// content.
     pub fn fit_unpaired(
         name: &str,
         reference: &StyleStats,
-        baseline: &StyleStats,
+        baseline: Option<&StyleStats>,
         strength: f32,
     ) -> Result<Self, StyleError> {
-        check_inputs(reference, baseline)?;
+        if reference.images == 0 {
+            return Err(StyleError::NoReferences);
+        }
+        if baseline.is_some_and(|b| b.images == 0) {
+            return Err(StyleError::NoBaseline);
+        }
         let s = strength.clamp(0.0, 1.0);
         let tone_curve = fade_contrast_curve(reference, baseline, s);
 
@@ -893,11 +903,11 @@ fn curve_from_pairs(pairs: &[(f32, f32)], s: f32) -> Vec<(u8, u8)> {
 /// levels are the user's own photos' typical (median) ones, floored at
 /// [`BLACK_PRIOR`] / [`WHITE_PRIOR`] — a foggy trip without true blacks
 /// shouldn't read references without them as faded.
-fn fade_contrast_curve(reference: &StyleStats, baseline: &StyleStats, s: f32) -> Vec<(u8, u8)> {
+fn fade_contrast_curve(reference: &StyleStats, baseline: Option<&StyleStats>, s: f32) -> Vec<(u8, u8)> {
     let darkest = reference.blacks.iter().copied().fold(f32::INFINITY, f32::min);
     let brightest = reference.whites.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-    let black = median(&baseline.blacks).max(BLACK_PRIOR);
-    let white = median(&baseline.whites).min(WHITE_PRIOR);
+    let black = baseline.map_or(BLACK_PRIOR, |b| median(&b.blacks).max(BLACK_PRIOR));
+    let white = baseline.map_or(WHITE_PRIOR, |b| median(&b.whites).min(WHITE_PRIOR));
     let lift = (darkest - black).clamp(0.0, MAX_FADE);
     let roll = (white - brightest).clamp(0.0, MAX_FADE);
     let (y0, y1) = (s * lift, 1.0 - s * roll);
@@ -906,7 +916,9 @@ fn fade_contrast_curve(reference: &StyleStats, baseline: &StyleStats, s: f32) ->
         let outer = (st.quantile(0.95) - st.quantile(0.05)).max(1e-3);
         (st.quantile(0.75) - st.quantile(0.25)) / outer
     };
-    let k = (shape(reference) / shape(baseline).max(1e-3)).clamp(CONTRAST_RANGE.0, CONTRAST_RANGE.1);
+    let k = baseline.map_or(1.0, |b| {
+        (shape(reference) / shape(b).max(1e-3)).clamp(CONTRAST_RANGE.0, CONTRAST_RANGE.1)
+    });
     let k = 1.0 + 0.5 * (k - 1.0) * s;
 
     let lin = |t: f32| y0 + t * (y1 - y0);
@@ -1528,7 +1540,7 @@ mod tests {
             assert!((*x as i32 - *y as i32).abs() <= 2, "{x} → {y}");
         }
         assert!(p.saturation.abs() <= 2, "saturation {}", p.saturation);
-        let u = StylePreset::fit_unpaired("x", &s, &s, 1.0).unwrap();
+        let u = StylePreset::fit_unpaired("x", &s, Some(&s), 1.0).unwrap();
         assert!(u.tone_curve.iter().all(|(x, y)| (*x as i32 - *y as i32).abs() <= 6), "{:?}", u.tone_curve);
     }
 
@@ -1538,7 +1550,7 @@ mod tests {
         let reference = stats(&[grade(&scene(1))]);
         for p in [
             StylePreset::fit_paired("x", &reference, &base, &PairedPixels::new(), 0.0).unwrap(),
-            StylePreset::fit_unpaired("x", &reference, &base, 0.0).unwrap(),
+            StylePreset::fit_unpaired("x", &reference, Some(&base), 0.0).unwrap(),
         ] {
             for c in [&p.tone_curve, &p.red_curve, &p.green_curve, &p.blue_curve] {
                 assert!(c.iter().all(|(x, y)| (*x as i32 - *y as i32).abs() <= 1), "{c:?}");
@@ -1574,7 +1586,7 @@ mod tests {
     fn unpaired_split_tone_transfers_across_content() {
         let r = stats(&[grade(&scene(5))]);
         let b = stats(&[scene(1), scene(2)]);
-        let p = StylePreset::fit_unpaired("x", &r, &b, 1.0).unwrap();
+        let p = StylePreset::fit_unpaired("x", &r, Some(&b), 1.0).unwrap();
         let at = |curve: &[(u8, u8)], x: f32| {
             let lut = curve_lut(curve);
             lut[(x * 255.0) as usize] as i32 - (x * 255.0) as i32
@@ -1599,7 +1611,7 @@ mod tests {
         };
         let r = stats(&[warm_bright(&scene(2)), warm_bright(&scene(4))]);
         let b = stats(&[scene(1), scene(3)]);
-        let p = StylePreset::fit_unpaired("x", &r, &b, 1.0).unwrap();
+        let p = StylePreset::fit_unpaired("x", &r, Some(&b), 1.0).unwrap();
         let mid = curve_lut(&p.tone_curve)[128] as i32;
         assert!((mid - 128).abs() <= 8, "midtones moved to {mid}");
         let at = |curve: &[(u8, u8)]| curve_lut(curve)[128] as i32 - 128;
@@ -1620,11 +1632,37 @@ mod tests {
         };
         let b = stats(&[scene(1)]);
         let all_faded = stats(&[lifted(&scene(2)), lifted(&scene(3))]);
-        let p = StylePreset::fit_unpaired("x", &all_faded, &b, 1.0).unwrap();
+        let p = StylePreset::fit_unpaired("x", &all_faded, Some(&b), 1.0).unwrap();
         assert!(p.tone_curve[0].1 >= 15, "faded set should lift blacks: {:?}", p.tone_curve);
         let mixed = stats(&[lifted(&scene(2)), scene(3)]);
-        let p = StylePreset::fit_unpaired("x", &mixed, &b, 1.0).unwrap();
+        let p = StylePreset::fit_unpaired("x", &mixed, Some(&b), 1.0).unwrap();
         assert!(p.tone_curve[0].1 <= 3, "one unfaded reference vetoes the lift: {:?}", p.tone_curve);
+    }
+
+    /// No photos to compare against (just extracting a style file): split
+    /// tone and fades still carry over, contrast stays put.
+    #[test]
+    fn unpaired_without_baseline_keeps_split_tone_and_fade() {
+        let faded_split = |img: &DynamicImage| {
+            let g = grade(img).to_rgb8();
+            let mut o = g.clone();
+            for p in o.pixels_mut() {
+                p.0 = p.0.map(|c| (30.0 + c as f32 * 0.85) as u8);
+            }
+            DynamicImage::ImageRgb8(o)
+        };
+        let r = stats(&[faded_split(&scene(2)), faded_split(&scene(5))]);
+        let p = StylePreset::fit_unpaired("x", &r, None, 1.0).unwrap();
+        assert!(p.tone_curve[0].1 >= 15, "fade carries over: {:?}", p.tone_curve);
+        let at = |curve: &[(u8, u8)], x: f32| curve_lut(curve)[(x * 255.0) as usize] as i32 - (x * 255.0) as i32;
+        assert!(at(&p.red_curve, 0.82) > 0 && at(&p.blue_curve, 0.82) < 0, "warm highlights");
+        // A linear fade and nothing else: the curve is a straight line.
+        let lut = curve_lut(&p.tone_curve);
+        let (y0, y1) = (lut[0] as f32, lut[255] as f32);
+        for x in [64usize, 128, 192] {
+            let line = y0 + (y1 - y0) * x as f32 / 255.0;
+            assert!((lut[x] as f32 - line).abs() <= 2.0, "no contrast change at {x}: {} vs {line}", lut[x]);
+        }
     }
 
     #[test]
@@ -1632,7 +1670,7 @@ mod tests {
         let (r, b) = (stats(&[grade(&scene(3))]), stats(&[scene(4)]));
         for p in [
             StylePreset::fit_paired("x", &r, &b, &PairedPixels::new(), 1.0).unwrap(),
-            StylePreset::fit_unpaired("x", &r, &b, 1.0).unwrap(),
+            StylePreset::fit_unpaired("x", &r, Some(&b), 1.0).unwrap(),
         ] {
             for c in [&p.tone_curve, &p.red_curve, &p.green_curve, &p.blue_curve] {
                 assert_eq!(c.first().unwrap().0, 0);
@@ -1647,7 +1685,8 @@ mod tests {
         let s = stats(&[scene(1)]);
         let e = StyleStats::new();
         assert_eq!(StylePreset::fit_paired("x", &e, &s, &PairedPixels::new(), 1.0), Err(StyleError::NoReferences));
-        assert_eq!(StylePreset::fit_unpaired("x", &s, &e, 1.0), Err(StyleError::NoBaseline));
+        assert_eq!(StylePreset::fit_unpaired("x", &s, Some(&e), 1.0), Err(StyleError::NoBaseline));
+        assert_eq!(StylePreset::fit_unpaired("x", &e, None, 1.0), Err(StyleError::NoReferences));
     }
 
     #[test]
