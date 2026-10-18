@@ -46,6 +46,9 @@ pub enum Verdict { Kept, Rejected, Unscored }
 pub struct JsonPhoto<'a> {
     pub id: String,
     pub path: &'a Path,
+    /// Content hash prefix (hex). Lets the server rebuild cache keys for the
+    /// thumbnail disk cache when it rehydrates a run after a restart.
+    pub sha256_short: String,
     pub captured_at: Option<DateTime<Utc>>,
     pub iso: Option<u32>,
     pub verdict: Verdict,
@@ -57,6 +60,9 @@ pub struct JsonPhoto<'a> {
 pub struct JsonPick<'a> {
     pub id: String,
     pub path: &'a Path,
+    /// Content hash prefix (hex). Lets the server rebuild cache keys for the
+    /// thumbnail disk cache when it rehydrates a run after a restart.
+    pub sha256_short: String,
     pub verdict: Verdict,
     pub rank: usize,
     pub final_score: FinalScore,
@@ -86,6 +92,7 @@ pub fn write_json_report(
                     photos_json.push(JsonPhoto {
                         id: pid.0.to_string(),
                         path: &p.path,
+                        sha256_short: hex::encode(p.sha256_short),
                         captured_at: p.captured_at,
                         iso: p.iso,
                         verdict: Verdict::Kept,
@@ -100,6 +107,7 @@ pub fn write_json_report(
                     photos_json.push(JsonPhoto {
                         id: pid.0.to_string(),
                         path: &p.path,
+                        sha256_short: hex::encode(p.sha256_short),
                         captured_at: p.captured_at,
                         iso: p.iso,
                         verdict: Verdict::Rejected,
@@ -114,6 +122,7 @@ pub fn write_json_report(
                         photos_json.push(JsonPhoto {
                             id: pid.0.to_string(),
                             path: &p.path,
+                            sha256_short: hex::encode(p.sha256_short),
                             captured_at: p.captured_at,
                             iso: p.iso,
                             verdict: Verdict::Unscored,
@@ -140,6 +149,7 @@ pub fn write_json_report(
                     picks.push(JsonPick {
                         id: pid.0.to_string(),
                         path: &p.path,
+                        sha256_short: hex::encode(p.sha256_short),
                         verdict: Verdict::Kept,
                         rank: rank + 1,
                         final_score: *fs,
@@ -152,6 +162,7 @@ pub fn write_json_report(
                     picks.push(JsonPick {
                         id: pid.0.to_string(),
                         path: &p.path,
+                        sha256_short: hex::encode(p.sha256_short),
                         verdict: Verdict::Rejected,
                         rank: base + idx + 1,
                         final_score: *fs,

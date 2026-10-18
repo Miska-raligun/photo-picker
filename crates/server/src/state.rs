@@ -444,7 +444,7 @@ impl AppState {
         {
             let runs = self.runs.lock().await;
             let Some(rec) = runs.get(run_id) else { return };
-            if !rec.composition_picks.is_empty() {
+            if is_hydrated(rec) {
                 return;
             }
             if !matches!(rec.status, RunStatus::Completed) {
@@ -464,7 +464,7 @@ impl AppState {
         let output = {
             let runs = self.runs.lock().await;
             let Some(rec) = runs.get(run_id) else { return };
-            if !rec.composition_picks.is_empty() {
+            if is_hydrated(rec) {
                 return;
             }
             rec.output.clone()
@@ -493,12 +493,21 @@ impl AppState {
         };
         let mut runs = self.runs.lock().await;
         if let Some(rec) = runs.get_mut(run_id) {
-            if rec.composition_picks.is_empty() {
+            if !is_hydrated(rec) {
                 rec.composition_picks = picks;
                 rec.photos = photos;
             }
         }
     }
+}
+
+/// A run's runtime data is in memory. Checking `composition_picks` alone was
+/// wrong for runs that legitimately have none (CLIP off): every call
+/// "rehydrated" again from `report.json` and replaced the live photo map with
+/// the (empty) one derived from composition groups, so later endpoints saw a
+/// run with no photos.
+fn is_hydrated(rec: &RunRecord) -> bool {
+    !rec.composition_picks.is_empty() || !rec.photos.is_empty()
 }
 
 /// On-disk run index: small metadata only. The heavy `composition_picks`
@@ -540,6 +549,25 @@ async fn write_runs_index(path: &Path, file: &PersistedRunsFile) -> std::io::Res
 #[derive(Deserialize)]
 struct PersistedReport {
     composition_groups: Vec<PersistedCompositionGroup>,
+    /// Every analysed photo appears here (Stage-A rejects included), so the
+    /// rebuilt photo map isn't limited to composition-group members. Older
+    /// reports always had it; `default` only guards hand-made files.
+    #[serde(default)]
+    stage_a_groups: Vec<PersistedStageAGroup>,
+}
+
+#[derive(Deserialize)]
+struct PersistedStageAGroup {
+    photos: Vec<PersistedPhoto>,
+}
+
+#[derive(Deserialize)]
+struct PersistedPhoto {
+    id: String,
+    path: PathBuf,
+    /// Absent in reports written before it was added.
+    #[serde(default)]
+    sha256_short: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -553,6 +581,8 @@ struct PersistedCompositionGroup {
 struct PersistedPick {
     id: String,
     path: PathBuf,
+    #[serde(default)]
+    sha256_short: Option<String>,
     verdict: PersistedVerdict,
     final_score: FinalScore,
 }
@@ -562,10 +592,11 @@ struct PersistedPick {
 enum PersistedVerdict { Kept, Rejected, Unscored }
 
 impl PersistedReport {
-    /// Rebuild runtime types from the on-disk report. The `photos` map is
-    /// the minimal subset needed by the apply/export/thumb paths — `path`
-    /// is correct; sha256/exif/burst metadata is reset because they're not
-    /// in the JSON (thumbs degrade to decode-from-source, which is fine).
+    /// Rebuild runtime types from the on-disk report. The `photos` map covers
+    /// every analysed photo with its `path` and, for reports that record it,
+    /// the content hash (so the thumbnail disk cache keeps working); exif /
+    /// burst metadata is reset. Without a hash the photo bypasses the disk
+    /// cache and thumbnails decode from source.
     fn into_runtime(self) -> anyhow::Result<(Vec<CompositionPick>, HashMap<PhotoId, PhotoRef>)> {
         use std::str::FromStr;
         use uuid::Uuid;
@@ -585,19 +616,7 @@ impl PersistedReport {
             for p in g.picks {
                 let pid = PhotoId(Uuid::from_str(&p.id)
                     .map_err(|e| anyhow::anyhow!("pick id {} not a uuid: {e}", p.id))?);
-                let format = guess_format_from_path(&p.path);
-                photos.entry(pid).or_insert(PhotoRef {
-                    id: pid,
-                    path: p.path.clone(),
-                    format,
-                    captured_at: None,
-                    file_size: 0,
-                    sha256_short: [0u8; 16],
-                    burst_id: None,
-                    drive_mode: None,
-                    iso: None,
-                    exposure_bias_ev: None,
-                });
+                photos.entry(pid).or_insert_with(|| minimal_photo_ref(pid, &p.path, p.sha256_short.as_deref()));
                 match p.verdict {
                     PersistedVerdict::Kept => kept.push((pid, p.final_score)),
                     PersistedVerdict::Rejected => rejected.push((pid, p.final_score)),
@@ -613,8 +632,49 @@ impl PersistedReport {
                 rejected,
             });
         }
+        for g in self.stage_a_groups {
+            for p in g.photos {
+                let Ok(uuid) = Uuid::from_str(&p.id) else { continue };
+                let pid = PhotoId(uuid);
+                photos
+                    .entry(pid)
+                    .or_insert_with(|| minimal_photo_ref(pid, &p.path, p.sha256_short.as_deref()));
+            }
+        }
         Ok((picks, photos))
     }
+}
+
+/// A `PhotoRef` rebuilt from a report entry. A missing or malformed hash
+/// becomes all-zero, which the thumbnail disk cache treats as "unknown".
+fn minimal_photo_ref(id: PhotoId, path: &Path, sha_hex: Option<&str>) -> PhotoRef {
+    let mut sha256_short = [0u8; 16];
+    if let Some(bytes) = sha_hex.and_then(hex_decode_16) {
+        sha256_short = bytes;
+    }
+    PhotoRef {
+        id,
+        path: path.to_path_buf(),
+        format: guess_format_from_path(path),
+        captured_at: None,
+        file_size: 0,
+        sha256_short,
+        burst_id: None,
+        drive_mode: None,
+        iso: None,
+        exposure_bias_ev: None,
+    }
+}
+
+fn hex_decode_16(h: &str) -> Option<[u8; 16]> {
+    if h.len() != 32 {
+        return None;
+    }
+    let mut out = [0u8; 16];
+    for (i, b) in out.iter_mut().enumerate() {
+        *b = u8::from_str_radix(h.get(2 * i..2 * i + 2)?, 16).ok()?;
+    }
+    Some(out)
 }
 
 fn guess_format_from_path(path: &Path) -> ImageFormat {
@@ -674,5 +734,41 @@ impl AppState {
 impl Default for AppState {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The rebuilt photo map must include Stage-A-only photos (burst rejects
+    /// that never reached a composition group) and carry the recorded hash so
+    /// thumbnail disk-cache keys stay distinct after a restart.
+    #[test]
+    fn rehydrated_photo_map_covers_stage_a_and_keeps_hashes() {
+        let kept = "11111111-1111-1111-1111-111111111111";
+        let burst_reject = "22222222-2222-2222-2222-222222222222";
+        let json = serde_json::json!({
+            "composition_groups": [],
+            "stage_a_groups": [{ "photos": [
+                { "id": kept, "path": "/p/a.jpg", "sha256_short": "000102030405060708090a0b0c0d0e0f" },
+                { "id": burst_reject, "path": "/p/b.NEF" },
+            ]}]
+        });
+        let parsed: PersistedReport = serde_json::from_value(json).unwrap();
+        let (_, photos) = parsed.into_runtime().unwrap();
+        assert_eq!(photos.len(), 2);
+        let a = &photos[&PhotoId(uuid::Uuid::parse_str(kept).unwrap())];
+        assert_eq!(a.sha256_short, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
+        let b = &photos[&PhotoId(uuid::Uuid::parse_str(burst_reject).unwrap())];
+        assert_eq!(b.sha256_short, [0; 16], "no recorded hash → unknown");
+        assert!(matches!(b.format, ImageFormat::Raw(RawKind::Nef)));
+    }
+
+    #[test]
+    fn hex_decode_rejects_malformed() {
+        assert!(hex_decode_16("zz").is_none());
+        assert!(hex_decode_16(&"g".repeat(32)).is_none());
+        assert_eq!(hex_decode_16(&"ff".repeat(16)), Some([255; 16]));
     }
 }

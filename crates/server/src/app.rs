@@ -1,6 +1,7 @@
 use crate::assets;
 use crate::handlers;
 use crate::state::AppState;
+use crate::style;
 use axum::extract::{Request, State};
 use axum::http::{request::Parts, HeaderMap, HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
@@ -34,6 +35,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/runs/:id/explain", post(handlers::explain))
         .route("/api/runs/:id/apply", post(handlers::apply))
         .route("/api/runs/:id/export", post(handlers::export))
+        .route("/api/runs/:id/style-preset", post(style::style_preset))
+        .route("/api/runs/:id/style-preview", post(style::style_preview))
         .layer(middleware::from_fn_with_state(state.clone(), require_token))
         .layer(cors_layer())
         .layer(TraceLayer::new_for_http())

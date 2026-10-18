@@ -75,11 +75,13 @@ async fn post_json(app: &axum::Router, uri: &str, body: serde_json::Value) -> (S
     (status, json)
 }
 
-/// All PHOTO_PICK_BROWSE_ROOTS-dependent assertions live in this single test:
-/// env vars are process-global and Rust runs tests concurrently, so spreading
-/// set_var across tests would race.
+/// PHOTO_PICK_BROWSE_ROOTS is process-global and Rust runs tests
+/// concurrently, so every test that sets it holds this lock for its duration.
+static ROOTS_ENV: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 #[tokio::test]
 async fn browse_and_reveal_respect_roots_allowlist() {
+    let _env = ROOTS_ENV.lock().await;
     let allowed = tempfile::tempdir().unwrap();
     let denied = tempfile::tempdir().unwrap();
     std::env::set_var("PHOTO_PICK_BROWSE_ROOTS", allowed.path());
@@ -450,4 +452,191 @@ async fn export_rates_by_aesthetic_score_against_the_whole_run() {
     assert_eq!(rating("p4.xmp"), "1", "worst of the run");
     assert_eq!(rating("p2.xmp"), "5", "user flag beats the score");
     assert_eq!(rating("unscored.xmp"), "4", "no score ⇒ old fixed rating");
+}
+
+/// Distinct procedural "photos" (different structure per `k`, so their
+/// dHashes are far apart) with neutral areas in every tonal zone.
+fn style_scene(k: u32) -> image::RgbImage {
+    image::RgbImage::from_fn(480, 320, |x, y| {
+        let band = match k % 3 {
+            0 => x / 40,
+            1 => y / 32,
+            _ => (x / 48 + y / 48) % 4,
+        };
+        let v = (40 + (band * 37 + k * 11) % 180) as u8;
+        if (x as i32 - 240).abs() < 30 && (y as i32 - 160).abs() < 30 {
+            image::Rgb([200, 60, 40])
+        } else {
+            image::Rgb([v, v, v])
+        }
+    })
+}
+
+/// A clear grade: lifted blacks, warm highlights, cool shadows.
+fn style_grade(img: &image::RgbImage) -> image::RgbImage {
+    let mut o = img.clone();
+    for p in o.pixels_mut() {
+        let [r, g, b] = p.0.map(|c| c as f32 / 255.0);
+        let y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        let (hi, sh) = (((y - 0.5) * 2.0).clamp(0.0, 1.0), ((0.5 - y) * 2.0).clamp(0.0, 1.0));
+        let f = |v: f32, d: f32| ((0.08 + 0.9 * v + d).clamp(0.0, 1.0) * 255.0) as u8;
+        p.0 = [f(r, 0.06 * hi - 0.05 * sh), f(g, 0.0), f(b, -0.06 * hi + 0.05 * sh)];
+    }
+    o
+}
+
+async fn style_run(tmp: &Path) -> (AppState, String, Vec<PhotoId>) {
+    let root = tmp.join("shoot");
+    std::fs::create_dir_all(&root).unwrap();
+    let mut photos = Vec::new();
+    for k in 0..3 {
+        let path = root.join(format!("p{k}.jpg"));
+        style_scene(k).save(&path).unwrap();
+        photos.push(photo_ref(path));
+    }
+    let ids = photos.iter().map(|(id, _)| *id).collect();
+    let state = test_state(tmp);
+    let run_id = insert_run(&state, root, tmp.join("out"), photos).await;
+    (state, run_id, ids)
+}
+
+#[tokio::test]
+async fn style_preset_pairs_an_edit_with_its_original() {
+    let _env = ROOTS_ENV.lock().await;
+    let tmp = tempfile::tempdir().unwrap();
+    std::env::set_var("PHOTO_PICK_BROWSE_ROOTS", tmp.path());
+    let (state, run_id, ids) = style_run(tmp.path()).await;
+    // The user's edited export of p1, saved outside the scanned folder.
+    let edited = tmp.path().join("edits/p1-edit.jpg");
+    std::fs::create_dir_all(edited.parent().unwrap()).unwrap();
+    style_grade(&style_scene(1)).save(&edited).unwrap();
+    let app = router(state);
+
+    let (status, json) = post_json(
+        &app,
+        &format!("/api/runs/{run_id}/style-preset"),
+        serde_json::json!({ "reference_paths": [edited], "name": "Trip look", "strength": 1.0 }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["mode"], "paired");
+    assert_eq!(json["references_used"], 1);
+    assert_eq!(json["file_name"], "Trip look.xmp");
+    let xmp = json["xmp"].as_str().unwrap();
+    assert!(xmp.contains("<crs:ToneCurvePV2012Red>") && xmp.contains("Trip look"));
+    // The lifted-black grade shows up at the master curve's black point.
+    assert!(json["preset"]["tone_curve"][0][1].as_u64().unwrap() >= 10, "{}", json["preset"]);
+    // Previews skip the already-edited original.
+    let previews: Vec<&str> = json["preview_ids"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
+    assert!(!previews.is_empty() && !previews.contains(&ids[1].to_string().as_str()));
+
+    // The preview endpoint renders the preset onto a run photo.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::post(format!("/api/runs/{run_id}/style-preview"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({ "preset": json["preset"], "photo_id": previews[0] }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.headers()["content-type"], "image/jpeg");
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    assert!(image::load_from_memory(&bytes).is_ok());
+
+    // References are held to the same allowlist as /browse and /scan.
+    let outside = tempfile::tempdir().unwrap();
+    let secret = outside.path().join("secret.jpg");
+    style_scene(2).save(&secret).unwrap();
+    let (status, _) = post_json(
+        &app,
+        &format!("/api/runs/{run_id}/style-preset"),
+        serde_json::json!({ "reference_paths": [secret] }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    std::env::remove_var("PHOTO_PICK_BROWSE_ROOTS");
+}
+
+#[tokio::test]
+async fn style_preset_falls_back_to_unpaired_and_reports_bad_references() {
+    let _env = ROOTS_ENV.lock().await;
+    let tmp = tempfile::tempdir().unwrap();
+    std::env::set_var("PHOTO_PICK_BROWSE_ROOTS", tmp.path());
+    let (state, run_id, _) = style_run(tmp.path()).await;
+    // A graded photo of something that isn't in the run, plus junk.
+    let other = tmp.path().join("refs/other.jpg");
+    std::fs::create_dir_all(other.parent().unwrap()).unwrap();
+    let mut different = style_scene(7);
+    for (x, y, p) in different.enumerate_pixels_mut() {
+        if (x * 7 + y * 3) % 50 < 25 {
+            *p = image::Rgb([20, 20, 20]);
+        }
+    }
+    style_grade(&different).save(&other).unwrap();
+    let junk = tmp.path().join("refs/broken.jpg");
+    std::fs::write(&junk, b"not an image").unwrap();
+    let app = router(state);
+
+    let (status, json) = post_json(
+        &app,
+        &format!("/api/runs/{run_id}/style-preset"),
+        serde_json::json!({ "reference_paths": [other, junk] }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["mode"], "unpaired");
+    assert_eq!(json["references_used"], 1);
+    assert_eq!(json["references_failed"].as_array().unwrap().len(), 1);
+    assert_eq!(json["preset"]["saturation"], 0, "unpaired never transfers saturation");
+    assert_eq!(json["file_name"], "photo-pick style.xmp");
+
+    // Nothing readable / nothing given → 400.
+    let (status, _) = post_json(
+        &app,
+        &format!("/api/runs/{run_id}/style-preset"),
+        serde_json::json!({ "reference_paths": [tmp.path().join("refs/broken.jpg")] }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, _) = post_json(
+        &app,
+        &format!("/api/runs/{run_id}/style-preset"),
+        serde_json::json!({ "reference_paths": [] }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    std::env::remove_var("PHOTO_PICK_BROWSE_ROOTS");
+}
+
+/// Regression: a completed run with no composition groups (CLIP off) used to
+/// "rehydrate" from report.json on every call and replace its live photo map
+/// with an empty one, so endpoints reported "photo not in run".
+#[tokio::test]
+async fn rehydration_keeps_live_photos_of_runs_without_composition_groups() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("shoot");
+    let out = tmp.path().join("out");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&out).unwrap();
+    std::fs::write(out.join("report.json"), br#"{"composition_groups": []}"#).unwrap();
+    let path = root.join("a.jpg");
+    style_scene(0).save(&path).unwrap();
+    let (id, p) = photo_ref(path);
+    let state = test_state(tmp.path());
+    let run_id = insert_run(&state, root, out, vec![(id, p)]).await;
+    let app = router(state);
+
+    for _ in 0..2 {
+        let resp = app
+            .clone()
+            .oneshot(Request::get(format!("/api/runs/{run_id}/thumb/{id}")).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "photo must stay in the run");
+    }
 }

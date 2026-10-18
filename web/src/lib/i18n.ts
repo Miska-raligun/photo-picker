@@ -312,6 +312,36 @@ const enMessages = {
       fileDelta: (here: number, there: number) =>
         `File set differs too: ${here} photo(s) only in this run, ${there} only in the other.`,
     },
+    stylePreset: {
+      button: "LR preset…",
+      title: "Lightroom style preset",
+      desc: "Learn a look from reference photos and save it as a Lightroom preset you can import and apply to any photo, then fine-tune.",
+      references: "Reference photos",
+      addReferences: "Add photos…",
+      referencesHint:
+        "Best: a few photos from this shoot you've already edited (export them as JPEG) — they're matched to their originals here for a precise preset. Unrelated photos work too, but only roughly.",
+      pickFilesHint: "Tick the photos themselves in the browser (not just the folder).",
+      remove: "Remove",
+      name: "Preset name",
+      namePlaceholder: "photo-pick style",
+      strength: "Strength (%)",
+      generate: "Generate",
+      regenerate: "Regenerate",
+      download: "Download .xmp",
+      failed: "Couldn't create the preset",
+      modePaired: "Precise",
+      modeUnpaired: "Approximate",
+      pairedExplain: (n: number) =>
+        `Matched ${n} reference${n === 1 ? "" : "s"} to ${n === 1 ? "its" : "their"} original${n === 1 ? "" : "s"} in this run and learned the edit directly: tone curve, RGB curves and saturation.`,
+      unpairedExplain:
+        "These references aren't edits of photos in this run, so only content-independent traits were learned — faded blacks / soft highlights, contrast and the shadow-vs-highlight colour split. Expect a rough starting point, not a match.",
+      leftOut: (names: string) => `No original found in this run, left out: ${names}`,
+      previewNote: "Approximate preview on photos from this run — Lightroom's own rendering will differ somewhat.",
+      before: "Before",
+      after: "After",
+      importHowTo:
+        "Lightroom Classic: Develop → Presets panel → + → Import Presets… and pick the .xmp.\nLightroom: Edit → Presets → ⋯ → Import Presets.\nThe preset only sets the tone curve, RGB curves and saturation; your exposure, white balance and other settings stay as they are.",
+    },
     export: {
       button: "Export…",
       title: "Export kept photos",
@@ -677,6 +707,36 @@ export const messages: Record<Lang, Messages> = {
       notInOther: "对方扫描中不存在此文件",
       fileDelta: (here: number, there: number) =>
         `文件集合也有差异：${here} 张仅在本次，${there} 张仅在对方。`,
+    },
+    stylePreset: {
+      button: "LR 预设…",
+      title: "Lightroom 风格预设",
+      desc: "从样例照片学习一种风格，保存成 Lightroom 预设。导入后可以套用到任意照片，再手动微调。",
+      references: "样例照片",
+      addReferences: "添加照片…",
+      referencesHint:
+        "最好选这次拍摄中你已经修好的几张（导出为 JPEG），程序会在本次扫描里找到它们的原片，生成精确的预设。不相关的照片也可以，但只能学到大致风格。",
+      pickFilesHint: "请在浏览窗口里勾选具体照片，而不是只选文件夹。",
+      remove: "移除",
+      name: "预设名称",
+      namePlaceholder: "photo-pick style",
+      strength: "强度（%）",
+      generate: "生成",
+      regenerate: "重新生成",
+      download: "下载 .xmp",
+      failed: "预设生成失败",
+      modePaired: "精确",
+      modeUnpaired: "近似",
+      pairedExplain: (n: number) =>
+        `已在本次扫描中找到 ${n} 张样例的原片，直接学习修图前后的变化：色调曲线、RGB 曲线和饱和度。`,
+      unpairedExplain:
+        "这些样例不是本次扫描中照片的修图版本，所以只学习了与画面内容无关的部分：黑位/高光的褪色、对比度，以及阴影与高光的冷暖差异。只能作为大致的起点，不会完全一致。",
+      leftOut: (names: string) => `本次扫描中没找到原片，未使用：${names}`,
+      previewNote: "以下是在本次扫描照片上的近似预览，Lightroom 的实际效果会略有不同。",
+      before: "原图",
+      after: "套用后",
+      importHowTo:
+        "Lightroom Classic：修改照片 → 预设面板 → + → 导入预设…，选择这个 .xmp。\nLightroom（新版）：编辑 → 预设 → ⋯ → 导入预设。\n预设只包含色调曲线、RGB 曲线和饱和度，不会改动你的曝光、白平衡等其他设置。",
     },
     export: {
       button: "导出…",

@@ -244,3 +244,29 @@ export interface PhotoTag {
   flag?: boolean;
   note?: string;
 }
+
+/** Lightroom develop settings fitted by `/style-preset`. Curves are LR point
+ *  curves as `[input, output]` pairs on 0–255. */
+export interface StylePreset {
+  name: string;
+  tone_curve: [number, number][];
+  red_curve: [number, number][];
+  green_curve: [number, number][];
+  blue_curve: [number, number][];
+  saturation: number;
+}
+
+export interface StylePresetResponse {
+  preset: StylePreset;
+  /** The preset file contents (Lightroom / Camera Raw .xmp). */
+  xmp: string;
+  file_name: string;
+  /** "paired": references were edits of run photos (precise);
+   *  "unpaired": unrelated references (rough approximation). */
+  mode: "paired" | "unpaired";
+  references_used: number;
+  references_unpaired: string[];
+  references_failed: { path: string; reason: string }[];
+  baseline_count: number;
+  preview_ids: string[];
+}
