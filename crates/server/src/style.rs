@@ -20,7 +20,7 @@ use photo_pick_core::ingest::{
     classify_extension, decode_thumbnail_for, encode_jpeg, PhotoId, PhotoRef, ThumbnailSpec,
 };
 use photo_pick_core::output::DEFAULT_THUMB_LONG_EDGE;
-use photo_pick_core::style::{StyleFile, StyleFormat, StylePreset, StyleStats};
+use photo_pick_core::style::{PairedPixels, StyleFile, StyleFormat, StylePreset, StyleStats};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -85,6 +85,10 @@ pub struct StylePresetResponse {
     pub mode: FitMode,
     /// References that contributed to the fit.
     pub references_used: usize,
+    /// Paired references whose framing matches their original (not cropped
+    /// or rotated), so per-colour changes (HSL, colour grading) could be
+    /// learned from them. 0 in unpaired mode.
+    pub references_aligned: usize,
     /// In paired mode: readable references with no original among the
     /// targets (left out, since mixing modes would dilute the paired fit).
     pub references_unpaired: Vec<PathBuf>,
@@ -304,6 +308,7 @@ fn fit_style(
     // Pair each reference with its nearest target.
     let mut edited = StyleStats::new();
     let mut originals = StyleStats::new();
+    let mut pixels = PairedPixels::new();
     let mut paired_refs = 0usize;
     let mut unpaired: Vec<&Loaded> = Vec::new();
     let mut paired_paths: Vec<&Path> = Vec::new();
@@ -313,6 +318,7 @@ fn fit_style(
             Some((o, (d, p))) if d <= PAIR_MAX_HAMMING && p <= PAIR_MAX_HAMMING => {
                 edited.add_image(&r.img);
                 originals.add_image(&o.img);
+                pixels.add_pair(&r.img, &o.img);
                 paired_refs += 1;
                 paired_paths.push(&o.path);
             }
@@ -321,7 +327,8 @@ fn fit_style(
     }
 
     let (preset, mode, used, baseline_count, references_unpaired) = if paired_refs > 0 {
-        let p = StylePreset::fit_paired(name, &edited, &originals, strength).map_err(|e| e.to_string())?;
+        let p = StylePreset::fit_paired(name, &edited, &originals, &pixels, strength)
+            .map_err(|e| e.to_string())?;
         let left_out = unpaired.iter().map(|r| r.path.clone()).collect();
         (p, FitMode::Paired, paired_refs, paired_refs, left_out)
     } else {
@@ -346,6 +353,7 @@ fn fit_style(
         preset,
         mode,
         references_used: used,
+        references_aligned: pixels.pair_count(),
         references_unpaired,
         references_failed: failed,
         targets_total,

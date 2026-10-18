@@ -15,7 +15,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { api } from "@/lib/api";
 import { useM } from "@/lib/i18n";
-import type { StyleFile, StyleFormat, StylePresetResponse } from "@/lib/types";
+import type { StyleFile, StyleFormat, StylePreset, StylePresetResponse } from "@/lib/types";
 import { BrowseDialog, type BrowseResult } from "./BrowseDialog";
 import { SliderInput } from "./SliderInput";
 import { Thumb } from "./Thumb";
@@ -31,6 +31,25 @@ const MIME: Record<StyleFormat, string> = {
 };
 
 type Picking = "references" | "targets" | null;
+
+const isFlat = (curve: [number, number][]) => curve.every(([x, y]) => Math.abs(x - y) <= 1);
+const WHEELS = ["shadows", "midtones", "highlights"] as const;
+
+/// Plain-language list of what a preset changes, e.g. "Tone curve",
+/// "Saturation +11", "HSL: Yellow, Red".
+function presetContents(p: StylePreset, t: ReturnType<typeof useM>["stylePreset"]): string[] {
+  const out: string[] = [];
+  if (!isFlat(p.tone_curve)) out.push(t.adj.toneCurve);
+  if (![p.red_curve, p.green_curve, p.blue_curve].every(isFlat)) out.push(t.adj.rgbCurves);
+  if (p.saturation !== 0) out.push(t.adj.saturation(p.saturation > 0 ? `+${p.saturation}` : `${p.saturation}`));
+  const bands = (p.hsl ?? [])
+    .map((b, i) => (b.hue || b.saturation || b.luminance ? t.bands[i] : null))
+    .filter((b): b is string => b !== null);
+  if (bands.length > 0) out.push(t.adj.hsl(bands.join(", ")));
+  const wheels = WHEELS.filter((w) => (p.color_grade?.[w]?.saturation ?? 0) > 0).map((w) => t.wheels[w]);
+  if (wheels.length > 0) out.push(t.adj.grade(wheels.join(", ")));
+  return out;
+}
 
 /// Style extraction: a standalone tool next to scanning. Pick reference
 /// photos with the look you want and the photos to restyle; get a Lightroom
@@ -285,12 +304,25 @@ export function StyleStudio() {
             <p className="text-xs text-muted-foreground">
               {t.targetsRead(result.targets_read, result.targets_total)}
             </p>
-            {(result.references_unpaired.length > 0 || result.references_failed.length > 0) && (
+            <div className="flex flex-wrap items-center gap-1.5 text-xs">
+              <span className="text-muted-foreground">{t.contains}:</span>
+              {presetContents(result.preset, t).map((c) => (
+                <Badge key={c} variant="outline" className="font-normal">
+                  {c}
+                </Badge>
+              ))}
+            </div>
+            {(result.references_unpaired.length > 0 ||
+              result.references_failed.length > 0 ||
+              (result.mode === "paired" && result.references_aligned < result.references_used)) && (
               <div className="flex gap-1.5 text-xs text-amber-700 dark:text-amber-400">
                 <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
                 <div className="space-y-0.5">
                   {result.references_unpaired.length > 0 && (
                     <p>{t.leftOut(result.references_unpaired.map(baseName).join(", "))}</p>
+                  )}
+                  {result.mode === "paired" && result.references_aligned < result.references_used && (
+                    <p>{t.notAligned(result.references_used - result.references_aligned)}</p>
                   )}
                   {result.references_failed.map((f) => (
                     <p key={f.path}>

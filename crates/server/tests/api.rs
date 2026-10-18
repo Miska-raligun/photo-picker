@@ -536,6 +536,8 @@ async fn style_preset_pairs_an_edit_with_its_original() {
     assert_eq!(status, StatusCode::OK, "{json}");
     assert_eq!(json["mode"], "paired");
     assert_eq!(json["references_used"], 1);
+    assert_eq!(json["references_aligned"], 1, "same framing → pixel-matched");
+    assert!(json["preset"]["hsl"].as_array().is_some_and(|b| b.len() == 8), "{}", json["preset"]);
     assert_eq!(json["targets_total"], 3);
     assert_eq!(json["targets_read"], 3);
     let files = json["files"].as_array().unwrap();
@@ -625,6 +627,7 @@ async fn style_preset_falls_back_to_unpaired_and_reports_bad_references() {
     assert_eq!(status, StatusCode::OK, "{json}");
     assert_eq!(json["mode"], "unpaired");
     assert_eq!(json["references_used"], 1);
+    assert_eq!(json["references_aligned"], 0);
     assert_eq!(json["references_failed"].as_array().unwrap().len(), 1);
     assert_eq!(json["preset"]["saturation"], 0, "unpaired never transfers saturation");
     // Default format: a Lightroom preset only.
