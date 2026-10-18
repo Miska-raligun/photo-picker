@@ -254,6 +254,10 @@ export interface StylePreset {
   green_curve: [number, number][];
   blue_curve: [number, number][];
   saturation: number;
+  /** HSL / Color Mixer per band: red, orange, yellow, green, aqua, blue,
+   *  purple, magenta. Precise (paired) mode only; zeros otherwise. */
+  hsl: { hue: number; saturation: number; luminance: number }[];
+  color_grade: Record<"shadows" | "midtones" | "highlights", { hue: number; saturation: number }>;
 }
 
 /** Export formats for a fitted style; mirrors `StyleFormat` in the core. */
@@ -273,6 +277,9 @@ export interface StylePresetResponse {
    *  "unpaired": unrelated references (rough approximation). */
   mode: "paired" | "unpaired";
   references_used: number;
+  /** Paired references framed like their original (not cropped / rotated),
+   *  which HSL and colour grading are learned from. */
+  references_aligned: number;
   references_unpaired: string[];
   references_failed: { path: string; reason: string }[];
   /** Photos to restyle that were found, and how many were actually read

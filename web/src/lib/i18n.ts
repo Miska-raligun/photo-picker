@@ -345,7 +345,7 @@ const enMessages = {
       format: {
         lr_preset: {
           label: "Lightroom preset (.xmp)",
-          desc: "Lightroom Classic, Lightroom, Camera Raw. Stays editable as curves; works on RAW.",
+          desc: "Lightroom Classic, Lightroom, Camera Raw. Stays editable as curves and sliders; works on RAW.",
           howTo:
             "Lightroom Classic: Develop → Presets panel → + → Import Presets…\nLightroom: Edit → Presets → ⋯ → Import Presets.",
         },
@@ -357,11 +357,23 @@ const enMessages = {
         },
       },
       settingsNote:
-        "Only the tone curve, RGB curves and saturation are included; exposure, white balance and other settings are left as they are.",
+        "Only colour and tone settings are included (tone curve, RGB curves, saturation; in Precise mode also HSL and colour grading). Exposure, white balance and everything else are left as they are.",
+      contains: "Adjusts",
+      adj: {
+        toneCurve: "Tone curve",
+        rgbCurves: "RGB curves",
+        saturation: (v: string) => `Saturation ${v}`,
+        hsl: (bands: string) => `HSL: ${bands}`,
+        grade: (wheels: string) => `Colour grading: ${wheels}`,
+      },
+      bands: ["Red", "Orange", "Yellow", "Green", "Aqua", "Blue", "Purple", "Magenta"],
+      wheels: { shadows: "shadows", midtones: "midtones", highlights: "highlights" },
+      notAligned: (n: number) =>
+        `${n} reference${n === 1 ? " is" : "s are"} cropped or rotated relative to the original, so ${n === 1 ? "it was" : "they were"} used for curves and saturation only (HSL and colour grading need the same framing).`,
       modePaired: "Precise",
       modeUnpaired: "Approximate",
       pairedExplain: (n: number) =>
-        `Matched ${n} reference${n === 1 ? "" : "s"} to ${n === 1 ? "its" : "their"} original${n === 1 ? "" : "s"} among the photos to restyle and learned the edit directly: tone curve, RGB curves and saturation.`,
+        `Matched ${n} reference${n === 1 ? "" : "s"} to ${n === 1 ? "its" : "their"} original${n === 1 ? "" : "s"} among the photos to restyle and learned the edit directly: tone curve, RGB curves, saturation, HSL and colour grading.`,
       unpairedExplain:
         "These references aren't edits of the photos to restyle, so only content-independent traits were learned — faded blacks / soft highlights, contrast and the shadow-vs-highlight colour split. Expect a rough starting point, not a match.",
       leftOut: (names: string) => `No original found among the photos to restyle, left out: ${names}`,
@@ -768,7 +780,7 @@ export const messages: Record<Lang, Messages> = {
       format: {
         lr_preset: {
           label: "Lightroom 预设（.xmp）",
-          desc: "适用于 Lightroom Classic、Lightroom、Camera Raw。导入后仍是可调的曲线，RAW 也能用。",
+          desc: "适用于 Lightroom Classic、Lightroom、Camera Raw。导入后仍是可调的曲线和滑块，RAW 也能用。",
           howTo:
             "Lightroom Classic：修改照片 → 预设面板 → + → 导入预设…\nLightroom（新版）：编辑 → 预设 → ⋯ → 导入预设。",
         },
@@ -779,11 +791,24 @@ export const messages: Record<Lang, Messages> = {
             "Photoshop：新建“颜色查找”调整图层 → 载入 3D LUT。其他软件：使用各自的 LUT / 颜色查找功能。LUT 按 sRGB 输入设计，建议在曝光和白平衡调好之后再套用。Lightroom 不能直接读取 .cube，需要先在 Camera Raw 中把它做成配置文件。",
         },
       },
-      settingsNote: "只包含色调曲线、RGB 曲线和饱和度，不会改动曝光、白平衡等其他设置。",
+      settingsNote:
+        "只包含色彩和影调设置（色调曲线、RGB 曲线、饱和度；精确模式下还有 HSL 和颜色分级），不会改动曝光、白平衡等其他设置。",
+      contains: "包含的调整",
+      adj: {
+        toneCurve: "色调曲线",
+        rgbCurves: "RGB 曲线",
+        saturation: (v: string) => `饱和度 ${v}`,
+        hsl: (bands: string) => `HSL：${bands}`,
+        grade: (wheels: string) => `颜色分级：${wheels}`,
+      },
+      bands: ["红色", "橙色", "黄色", "绿色", "浅绿色", "蓝色", "紫色", "洋红"],
+      wheels: { shadows: "阴影", midtones: "中间调", highlights: "高光" },
+      notAligned: (n: number) =>
+        `有 ${n} 张样例相对原片做过裁剪或旋转，只用来学习曲线和饱和度（HSL 和颜色分级需要构图一致）。`,
       modePaired: "精确",
       modeUnpaired: "近似",
       pairedExplain: (n: number) =>
-        `已在要调色的照片中找到 ${n} 张样例的原片，直接学习修图前后的变化：色调曲线、RGB 曲线和饱和度。`,
+        `已在要调色的照片中找到 ${n} 张样例的原片，直接学习修图前后的变化：色调曲线、RGB 曲线、饱和度、HSL 和颜色分级。`,
       unpairedExplain:
         "这些样例不是要调色照片的修图版本，所以只学习了与画面内容无关的部分：黑位/高光的褪色、对比度，以及阴影与高光的冷暖差异。只能作为大致的起点，不会完全一致。",
       leftOut: (names: string) => `要调色的照片中没找到原片，未使用：${names}`,
