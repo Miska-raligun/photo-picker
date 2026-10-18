@@ -17,7 +17,6 @@ import {
   LayoutGrid,
   Copy,
   Loader2,
-  Palette,
   Upload,
   XCircle,
 } from "lucide-react";
@@ -40,7 +39,6 @@ import { Separator } from "@/components/ui/separator";
 import { GroupCard } from "./GroupCard";
 import { ApplyBar } from "./ApplyBar";
 import { ExportDialog } from "./ExportDialog";
-import { StylePresetDialog } from "./StylePresetDialog";
 import { Thumb } from "./Thumb";
 import { api } from "@/lib/api";
 import { useM } from "@/lib/i18n";
@@ -82,7 +80,6 @@ export function RunDetailDialog({
 }: Props) {
   const m = useM();
   const [exportOpen, setExportOpen] = useState(false);
-  const [styleOpen, setStyleOpen] = useState(false);
   if (!run) return null;
   const report = run.report;
   const picks = run.composition_picks ?? [];
@@ -273,31 +270,16 @@ export function RunDetailDialog({
                 </Button>
               )}
             </div>
-            {isCompleted && (
-              <div className="flex gap-2">
-                {/* Style presets only need the run's photos, not picks. */}
-                <Button variant="outline" size="sm" onClick={() => setStyleOpen(true)}>
-                  <Palette className="h-4 w-4" />
-                  {m.stylePreset.button}
-                </Button>
-                {picks.length > 0 && (
-                  <Button variant="outline" size="sm" onClick={() => setExportOpen(true)}>
-                    <Upload className="h-4 w-4" />
-                    {m.export.button}
-                  </Button>
-                )}
-              </div>
+            {isCompleted && picks.length > 0 && (
+              <Button variant="outline" size="sm" onClick={() => setExportOpen(true)}>
+                <Upload className="h-4 w-4" />
+                {m.export.button}
+              </Button>
             )}
           </div>
         </div>
       </DialogContent>
 
-      <StylePresetDialog
-        open={styleOpen}
-        onOpenChange={setStyleOpen}
-        runId={run.id}
-        initialPath={run.root}
-      />
       <ExportDialog
         open={exportOpen}
         onOpenChange={setExportOpen}

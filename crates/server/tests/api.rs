@@ -485,38 +485,48 @@ fn style_grade(img: &image::RgbImage) -> image::RgbImage {
     o
 }
 
-async fn style_run(tmp: &Path) -> (AppState, String, Vec<PhotoId>) {
-    let root = tmp.join("shoot");
-    std::fs::create_dir_all(&root).unwrap();
-    let mut photos = Vec::new();
+/// The "restyle these" folder: three distinct photos.
+fn style_targets(tmp: &Path) -> PathBuf {
+    let dir = tmp.join("trip");
+    std::fs::create_dir_all(&dir).unwrap();
     for k in 0..3 {
-        let path = root.join(format!("p{k}.jpg"));
-        style_scene(k).save(&path).unwrap();
-        photos.push(photo_ref(path));
+        style_scene(k).save(dir.join(format!("p{k}.jpg"))).unwrap();
     }
-    let ids = photos.iter().map(|(id, _)| *id).collect();
-    let state = test_state(tmp);
-    let run_id = insert_run(&state, root, tmp.join("out"), photos).await;
-    (state, run_id, ids)
+    dir
 }
 
+async fn post_raw(app: &axum::Router, uri: &str, body: serde_json::Value) -> axum::response::Response {
+    app.clone()
+        .oneshot(
+            Request::post(uri)
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+}
+
+/// Style extraction is standalone (no scan run): references + a folder of
+/// photos to restyle. An edited export of one of those photos is paired with
+/// its original.
 #[tokio::test]
 async fn style_preset_pairs_an_edit_with_its_original() {
     let _env = ROOTS_ENV.lock().await;
     let tmp = tempfile::tempdir().unwrap();
     std::env::set_var("PHOTO_PICK_BROWSE_ROOTS", tmp.path());
-    let (state, run_id, ids) = style_run(tmp.path()).await;
-    // The user's edited export of p1, saved outside the scanned folder.
+    let dir = style_targets(tmp.path());
     let edited = tmp.path().join("edits/p1-edit.jpg");
     std::fs::create_dir_all(edited.parent().unwrap()).unwrap();
     style_grade(&style_scene(1)).save(&edited).unwrap();
-    let app = router(state);
+    let app = router(test_state(tmp.path()));
 
     let (status, json) = post_json(
         &app,
-        &format!("/api/runs/{run_id}/style-preset"),
+        "/api/style/preset",
         serde_json::json!({
             "reference_paths": [edited],
+            "target_dir": dir,
             "name": "Trip look",
             "strength": 1.0,
             "formats": ["lr_preset", "cube_lut"],
@@ -526,6 +536,8 @@ async fn style_preset_pairs_an_edit_with_its_original() {
     assert_eq!(status, StatusCode::OK, "{json}");
     assert_eq!(json["mode"], "paired");
     assert_eq!(json["references_used"], 1);
+    assert_eq!(json["targets_total"], 3);
+    assert_eq!(json["targets_read"], 3);
     let files = json["files"].as_array().unwrap();
     assert_eq!(files.len(), 2);
     assert_eq!(files[0]["format"], "lr_preset");
@@ -537,39 +549,48 @@ async fn style_preset_pairs_an_edit_with_its_original() {
     assert!(files[1]["content"].as_str().unwrap().contains("LUT_3D_SIZE 33"));
     // The lifted-black grade shows up at the master curve's black point.
     assert!(json["preset"]["tone_curve"][0][1].as_u64().unwrap() >= 10, "{}", json["preset"]);
-    // Previews skip the already-edited original.
-    let previews: Vec<&str> = json["preview_ids"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
-    assert!(!previews.is_empty() && !previews.contains(&ids[1].to_string().as_str()));
+    // Previews skip the photo that already has an edit.
+    let previews: Vec<&str> =
+        json["preview_paths"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
+    assert!(!previews.is_empty());
+    assert!(!previews.iter().any(|p| p.ends_with("p1.jpg")), "{previews:?}");
 
-    // The preview endpoint renders the preset onto a run photo.
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::post(format!("/api/runs/{run_id}/style-preview"))
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    serde_json::json!({ "preset": json["preset"], "photo_id": previews[0] }).to_string(),
-                ))
-                .unwrap(),
+    // Preview: "before" (no preset) and "after" both render as JPEG and differ.
+    let mut images = Vec::new();
+    for preset in [serde_json::Value::Null, json["preset"].clone()] {
+        let resp = post_raw(
+            &app,
+            "/api/style/preview",
+            serde_json::json!({ "path": previews[0], "preset": preset }),
         )
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-    assert_eq!(resp.headers()["content-type"], "image/jpeg");
-    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
-    assert!(image::load_from_memory(&bytes).is_ok());
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(resp.headers()["content-type"], "image/jpeg");
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        images.push(image::load_from_memory(&bytes).unwrap().to_rgb8());
+    }
+    assert_ne!(images[0].as_raw(), images[1].as_raw(), "the preset must change the photo");
 
-    // References are held to the same allowlist as /browse and /scan.
+    // Every path is held to the browse-roots allowlist.
     let outside = tempfile::tempdir().unwrap();
     let secret = outside.path().join("secret.jpg");
     style_scene(2).save(&secret).unwrap();
     let (status, _) = post_json(
         &app,
-        &format!("/api/runs/{run_id}/style-preset"),
-        serde_json::json!({ "reference_paths": [secret] }),
+        "/api/style/preset",
+        serde_json::json!({ "reference_paths": [secret], "target_dir": dir }),
     )
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _) = post_json(
+        &app,
+        "/api/style/preset",
+        serde_json::json!({ "reference_paths": [edited], "target_dir": outside.path() }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let resp = post_raw(&app, "/api/style/preview", serde_json::json!({ "path": secret })).await;
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
     std::env::remove_var("PHOTO_PICK_BROWSE_ROOTS");
 }
 
@@ -578,8 +599,8 @@ async fn style_preset_falls_back_to_unpaired_and_reports_bad_references() {
     let _env = ROOTS_ENV.lock().await;
     let tmp = tempfile::tempdir().unwrap();
     std::env::set_var("PHOTO_PICK_BROWSE_ROOTS", tmp.path());
-    let (state, run_id, _) = style_run(tmp.path()).await;
-    // A graded photo of something that isn't in the run, plus junk.
+    let dir = style_targets(tmp.path());
+    // A graded photo of something that isn't among the targets, plus junk.
     let other = tmp.path().join("refs/other.jpg");
     std::fs::create_dir_all(other.parent().unwrap()).unwrap();
     let mut different = style_scene(7);
@@ -591,12 +612,14 @@ async fn style_preset_falls_back_to_unpaired_and_reports_bad_references() {
     style_grade(&different).save(&other).unwrap();
     let junk = tmp.path().join("refs/broken.jpg");
     std::fs::write(&junk, b"not an image").unwrap();
-    let app = router(state);
+    let app = router(test_state(tmp.path()));
 
+    // Targets given as individual files this time.
+    let files: Vec<PathBuf> = (0..3).map(|k| dir.join(format!("p{k}.jpg"))).collect();
     let (status, json) = post_json(
         &app,
-        &format!("/api/runs/{run_id}/style-preset"),
-        serde_json::json!({ "reference_paths": [other, junk] }),
+        "/api/style/preset",
+        serde_json::json!({ "reference_paths": [other, junk], "target_paths": files }),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{json}");
@@ -608,30 +631,15 @@ async fn style_preset_falls_back_to_unpaired_and_reports_bad_references() {
     assert_eq!(json["files"].as_array().unwrap().len(), 1);
     assert_eq!(json["files"][0]["file_name"], "photo-pick style.xmp");
 
-    // No formats → 400.
-    let (status, _) = post_json(
-        &app,
-        &format!("/api/runs/{run_id}/style-preset"),
-        serde_json::json!({ "reference_paths": [tmp.path().join("refs/other.jpg")], "formats": [] }),
-    )
-    .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-
-    // Nothing readable / nothing given → 400.
-    let (status, _) = post_json(
-        &app,
-        &format!("/api/runs/{run_id}/style-preset"),
-        serde_json::json!({ "reference_paths": [tmp.path().join("refs/broken.jpg")] }),
-    )
-    .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-    let (status, _) = post_json(
-        &app,
-        &format!("/api/runs/{run_id}/style-preset"),
-        serde_json::json!({ "reference_paths": [] }),
-    )
-    .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let bad = |body: serde_json::Value| {
+        let app = app.clone();
+        async move { post_json(&app, "/api/style/preset", body).await.0 }
+    };
+    // No formats, no references, no targets, nothing readable → 400.
+    assert_eq!(bad(serde_json::json!({ "reference_paths": [other], "target_dir": dir, "formats": [] })).await, StatusCode::BAD_REQUEST);
+    assert_eq!(bad(serde_json::json!({ "reference_paths": [], "target_dir": dir })).await, StatusCode::BAD_REQUEST);
+    assert_eq!(bad(serde_json::json!({ "reference_paths": [other] })).await, StatusCode::BAD_REQUEST);
+    assert_eq!(bad(serde_json::json!({ "reference_paths": [junk], "target_dir": dir })).await, StatusCode::BAD_REQUEST);
     std::env::remove_var("PHOTO_PICK_BROWSE_ROOTS");
 }
 

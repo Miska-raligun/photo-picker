@@ -1,44 +1,55 @@
-//! Lightroom style-preset endpoints.
+//! Style extraction endpoints — a standalone tool, independent of scan runs.
 //!
-//! `POST /api/runs/:id/style-preset` learns a look from reference photos and
-//! returns it as a Lightroom preset (`.xmp`); `POST /api/runs/:id/style-preview`
-//! renders an approximate before/after of a fitted preset on one run photo.
+//! `POST /api/style/preset` learns a look from *reference* photos and fits it
+//! against a set of *target* photos (the ones the user wants to restyle),
+//! returning a Lightroom preset and/or 3D LUT. `POST /api/style/preview`
+//! renders a target photo before / after (approximately) applying a preset.
 //!
-//! References that are edited versions of photos in the run are paired with
-//! their originals automatically. Tone curves and colour grades keep the
-//! brightness *ordering* that dHash encodes and the low-frequency structure
-//! pHash encodes, so on real photos an edit sits 0–3 bits from its original
-//! on both, while unrelated shots are 22–31 bits away. Requiring both guards
+//! References that are edited versions of target photos are paired with their
+//! originals automatically. Tone curves and colour grades keep the brightness
+//! *ordering* that dHash encodes and the low-frequency structure pHash
+//! encodes, so on real photos an edit sits 0–3 bits from its original on
+//! both, while unrelated shots are 22–31 bits away. Requiring both guards
 //! against low-detail frames (plain sky, a wall) whose dHashes collide.
 //! Paired fitting is far more accurate; see `photo_pick_core::style`.
 
-use crate::state::AppState;
-use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use photo_pick_core::features::{hash::hamming, FeatureExtractor, HashOnlyExtractor};
-use photo_pick_core::ingest::{decode_thumbnail_for, encode_jpeg, scan_files, PhotoId, PhotoRef, ThumbnailSpec};
-use photo_pick_core::output::{ThumbDiskCache, DEFAULT_THUMB_LONG_EDGE, DEFAULT_THUMB_QUALITY};
+use photo_pick_core::ingest::{
+    classify_extension, decode_thumbnail_for, encode_jpeg, PhotoId, PhotoRef, ThumbnailSpec,
+};
+use photo_pick_core::output::DEFAULT_THUMB_LONG_EDGE;
 use photo_pick_core::style::{StyleFile, StyleFormat, StylePreset, StyleStats};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 /// An edit and its original differ by a few bits on both hashes; unrelated
 /// frames by 22+. At or under this on *both* counts as the same shot.
 const PAIR_MAX_HAMMING: u32 = 10;
-/// Cap on baseline photos read for unpaired fitting (evenly sampled).
+/// Cap on target photos decoded per request. Beyond it, targets whose file
+/// name resembles a reference's are kept (likely originals) and the rest are
+/// sampled evenly.
+const MAX_TARGETS: usize = 600;
+/// Cap on target photos used as the unpaired baseline (evenly sampled).
 const MAX_BASELINE: usize = 300;
 /// Reference photos accepted per request.
 const MAX_REFERENCES: usize = 50;
-/// Run photos offered to the UI for before/after previews.
+/// Target photos suggested for before/after previews.
 const PREVIEW_COUNT: usize = 4;
 
 #[derive(Debug, Deserialize)]
 pub struct StylePresetRequest {
-    /// Reference photos (anywhere on disk) whose look to learn.
+    /// Photos whose look to learn.
     pub reference_paths: Vec<PathBuf>,
+    /// Photos to restyle, as individual files…
+    #[serde(default)]
+    pub target_paths: Vec<PathBuf>,
+    /// …and/or a folder of them (walked recursively, hidden entries skipped).
+    #[serde(default)]
+    pub target_dir: Option<PathBuf>,
     #[serde(default)]
     pub name: Option<String>,
     /// 0–1; scales every adjustment. Defaults to 1.
@@ -74,73 +85,71 @@ pub struct StylePresetResponse {
     pub mode: FitMode,
     /// References that contributed to the fit.
     pub references_used: usize,
-    /// In paired mode: readable references with no original in this run
-    /// (left out, since mixing modes would dilute the paired fit).
+    /// In paired mode: readable references with no original among the
+    /// targets (left out, since mixing modes would dilute the paired fit).
     pub references_unpaired: Vec<PathBuf>,
     /// References that couldn't be read at all.
     pub references_failed: Vec<ReferenceIssue>,
-    /// Run photos the fit compared against (originals, or the baseline sample).
+    /// Target photos found, and how many of them were actually read.
+    pub targets_total: usize,
+    pub targets_read: usize,
+    /// Photos the fit compared against (originals, or the baseline sample).
     pub baseline_count: usize,
-    /// Run photo ids suggested for before/after previews.
-    pub preview_ids: Vec<String>,
+    /// Target photos suggested for before/after previews.
+    pub preview_paths: Vec<PathBuf>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct StylePreviewRequest {
-    pub preset: StylePreset,
-    pub photo_id: String,
+    pub path: PathBuf,
+    /// Preset to apply; omit for the untouched "before" image.
+    #[serde(default)]
+    pub preset: Option<StylePreset>,
 }
 
 fn bad_request(msg: impl Into<String>) -> Response {
     (StatusCode::BAD_REQUEST, msg.into()).into_response()
 }
 
-pub async fn style_preset(
-    State(state): State<AppState>,
-    Path(run_id): Path<String>,
-    Json(req): Json<StylePresetRequest>,
-) -> Response {
+/// Same allowlist as /browse and /scan — the style tool must not be a way
+/// around it. Paths that don't resolve pass here and fail later as unreadable.
+/// Returns a ready 403 response for the first path outside the roots.
+fn check_in_roots<'a>(paths: impl IntoIterator<Item = &'a PathBuf>) -> Option<Response> {
+    let roots = crate::handlers::allowed_roots();
+    paths.into_iter().find_map(|p| {
+        let c = std::fs::canonicalize(p).map(crate::handlers::strip_verbatim_prefix).ok()?;
+        (!crate::handlers::path_under(&c, &roots)).then(|| {
+            (
+                StatusCode::FORBIDDEN,
+                format!(
+                    "{} is outside the configured browse roots; set PHOTO_PICK_BROWSE_ROOTS to widen",
+                    c.display()
+                ),
+            )
+                .into_response()
+        })
+    })
+}
+
+pub async fn style_preset(Json(req): Json<StylePresetRequest>) -> Response {
     if req.reference_paths.is_empty() {
         return bad_request("pick at least one reference photo");
     }
     if req.reference_paths.len() > MAX_REFERENCES {
         return bad_request(format!("at most {MAX_REFERENCES} reference photos"));
     }
+    if req.target_paths.is_empty() && req.target_dir.is_none() {
+        return bad_request("pick the photos to restyle (a folder or files)");
+    }
     let mut seen = std::collections::HashSet::new();
     let formats: Vec<StyleFormat> = req.formats.iter().copied().filter(|f| seen.insert(*f)).collect();
     if formats.is_empty() {
         return bad_request("pick at least one output format");
     }
-    // Same allowlist as /browse and /scan: reading references must not be a
-    // way around it. Paths that don't resolve fall through and are reported
-    // per-file as unreadable.
-    let roots = crate::handlers::allowed_roots();
-    for p in &req.reference_paths {
-        if let Ok(c) = std::fs::canonicalize(p).map(crate::handlers::strip_verbatim_prefix) {
-            if !crate::handlers::path_under(&c, &roots) {
-                return (
-                    StatusCode::FORBIDDEN,
-                    format!(
-                        "{} is outside the configured browse roots; set PHOTO_PICK_BROWSE_ROOTS to widen",
-                        c.display()
-                    ),
-                )
-                    .into_response();
-            }
-        }
-    }
-    state.ensure_rehydrated(&run_id).await;
-    let (photos, output_dir) = {
-        let guard = state.runs.lock().await;
-        let Some(rec) = guard.get(&run_id) else {
-            return (StatusCode::NOT_FOUND, "run not found").into_response();
-        };
-        let mut photos: Vec<PhotoRef> = rec.photos.values().cloned().collect();
-        photos.sort_by(|a, b| a.path.cmp(&b.path));
-        (photos, rec.output.clone())
-    };
-    if photos.is_empty() {
-        return bad_request("this run has no photos to compare against");
+    if let Some(forbidden) =
+        check_in_roots(req.reference_paths.iter().chain(&req.target_paths).chain(req.target_dir.iter()))
+    {
+        return forbidden;
     }
 
     let name = req
@@ -151,10 +160,16 @@ pub async fn style_preset(
         .unwrap_or("photo-pick style")
         .to_string();
     let strength = req.strength.unwrap_or(1.0).clamp(0.0, 1.0);
-    let refs = req.reference_paths;
 
     let result = tokio::task::spawn_blocking(move || {
-        fit_style(&name, strength, &formats, &refs, &photos, &output_dir)
+        let mut targets: Vec<PathBuf> = req.target_paths.clone();
+        if let Some(dir) = &req.target_dir {
+            if !dir.is_dir() {
+                return Err(format!("{} is not a folder", dir.display()));
+            }
+            list_photos(dir, &mut targets);
+        }
+        fit_style(&name, strength, &formats, &req.reference_paths, targets)
     })
     .await;
     match result {
@@ -164,9 +179,48 @@ pub async fn style_preset(
     }
 }
 
+/// Recursively collect supported photo files under `dir` (hidden entries
+/// skipped, symlinks not followed). No content hashing — unlike a scan, the
+/// style tool only needs thumbnails, so a big RAW folder lists instantly.
+fn list_photos(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for e in entries.flatten() {
+        let path = e.path();
+        if path.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with('.')) {
+            continue;
+        }
+        match e.file_type() {
+            Ok(t) if t.is_dir() => list_photos(&path, out),
+            Ok(t) if t.is_file() && classify_extension(&path).is_some() => out.push(path),
+            _ => {}
+        }
+    }
+}
+
+/// A minimal `PhotoRef` for decoding a file: format from the extension;
+/// orientation is read from the file by the decoder itself.
+fn photo_ref(path: &Path) -> Option<PhotoRef> {
+    Some(PhotoRef {
+        id: PhotoId::new(),
+        path: path.to_path_buf(),
+        format: classify_extension(path)?,
+        captured_at: None,
+        file_size: 0,
+        sha256_short: [0; 16],
+        burst_id: None,
+        drive_mode: None,
+        iso: None,
+        exposure_bias_ev: None,
+    })
+}
+
+fn thumb_spec() -> ThumbnailSpec {
+    ThumbnailSpec { long_edge: DEFAULT_THUMB_LONG_EDGE }
+}
+
 /// A photo's thumbnail plus its perceptual hashes.
 struct Loaded {
-    photo: PhotoRef,
+    path: PathBuf,
     img: image::DynamicImage,
     dhash: u64,
     phash: u64,
@@ -178,31 +232,55 @@ impl Loaded {
     }
 }
 
+fn load(path: &Path, hasher: &HashOnlyExtractor) -> Result<Loaded, String> {
+    let photo = photo_ref(path).ok_or_else(|| "unsupported file type".to_string())?;
+    let img = decode_thumbnail_for(&photo, thumb_spec()).map_err(|e| e.to_string())?;
+    let f = hasher.extract(&photo, &img).map_err(|e| e.to_string())?;
+    Ok(Loaded { path: path.to_path_buf(), img, dhash: f.dhash, phash: f.phash })
+}
+
+/// Lower-cased file stem with common edit suffixes' separators normalised,
+/// e.g. `IMG_1234-Edit-2.jpg` → `img_1234-edit-2`.
+fn stem(p: &Path) -> String {
+    p.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_lowercase()
+}
+
+/// Keep at most `cap` targets: every one whose stem a reference's stem starts
+/// with (or vice versa) — edited exports usually keep the original's name —
+/// then an even sample of the rest.
+fn choose_targets(mut targets: Vec<PathBuf>, refs: &[PathBuf], cap: usize) -> Vec<PathBuf> {
+    targets.sort();
+    targets.dedup();
+    if targets.len() <= cap {
+        return targets;
+    }
+    let ref_stems: Vec<String> = refs.iter().map(|r| stem(r)).filter(|s| s.len() >= 3).collect();
+    let (mut keep, rest): (Vec<PathBuf>, Vec<PathBuf>) = targets.into_iter().partition(|t| {
+        let s = stem(t);
+        s.len() >= 3 && ref_stems.iter().any(|r| r.starts_with(&s) || s.starts_with(r.as_str()))
+    });
+    keep.truncate(cap);
+    let room = cap - keep.len();
+    if room > 0 && !rest.is_empty() {
+        let step = rest.len() as f64 / room as f64;
+        keep.extend((0..room.min(rest.len())).map(|i| rest[(i as f64 * step) as usize].clone()));
+    }
+    keep
+}
+
 fn fit_style(
     name: &str,
     strength: f32,
     formats: &[StyleFormat],
     reference_paths: &[PathBuf],
-    photos: &[PhotoRef],
-    output_dir: &std::path::Path,
+    targets: Vec<PathBuf>,
 ) -> Result<StylePresetResponse, String> {
     let hasher = HashOnlyExtractor::new();
-    let spec = ThumbnailSpec { long_edge: DEFAULT_THUMB_LONG_EDGE };
 
-    // References: decode at the same size as run thumbnails so statistics
-    // and hashes are comparable.
     let mut failed = Vec::new();
     let mut refs: Vec<Loaded> = Vec::new();
     for path in reference_paths {
-        let loaded = scan_files(std::slice::from_ref(path))
-            .map_err(|e| e.to_string())
-            .and_then(|mut v| v.pop().ok_or_else(|| "unsupported file type".to_string()))
-            .and_then(|photo| {
-                let img = decode_thumbnail_for(&photo, spec).map_err(|e| e.to_string())?;
-                let f = hasher.extract(&photo, &img).map_err(|e| e.to_string())?;
-                Ok(Loaded { photo, img, dhash: f.dhash, phash: f.phash })
-            });
-        match loaded {
+        match load(path, &hasher) {
             Ok(l) => refs.push(l),
             Err(reason) => failed.push(ReferenceIssue { path: path.clone(), reason }),
         }
@@ -211,22 +289,24 @@ fn fit_style(
         return Err("none of the reference photos could be read".into());
     }
 
-    // Run photos (excluding the references themselves, which may live in
-    // the scanned folder) from the scan's thumbnail cache.
-    let ref_paths: Vec<&PathBuf> = refs.iter().map(|r| &r.photo.path).collect();
-    let candidates: Vec<&PhotoRef> = photos.iter().filter(|p| !ref_paths.contains(&&p.path)).collect();
-    if candidates.is_empty() {
-        return Err("this run has no photos besides the references".into());
+    // Targets, minus the references themselves (they may sit in the same folder).
+    let targets: Vec<PathBuf> = targets.into_iter().filter(|t| !reference_paths.contains(t)).collect();
+    let targets_total = targets.len();
+    if targets_total == 0 {
+        return Err("no photos to restyle were found (besides the references)".into());
     }
-    let thumbs = ThumbDiskCache::new(output_dir.join(".thumbs"), DEFAULT_THUMB_LONG_EDGE, DEFAULT_THUMB_QUALITY);
-    let run = load_parallel(&candidates, &thumbs, &hasher);
+    let chosen = choose_targets(targets, reference_paths, MAX_TARGETS);
+    let run = load_parallel(&chosen, &hasher);
+    if run.is_empty() {
+        return Err("none of the photos to restyle could be read".into());
+    }
 
-    // Pair each reference with its nearest run photo.
+    // Pair each reference with its nearest target.
     let mut edited = StyleStats::new();
     let mut originals = StyleStats::new();
     let mut paired_refs = 0usize;
     let mut unpaired: Vec<&Loaded> = Vec::new();
-    let mut paired_ids: Vec<PhotoId> = Vec::new();
+    let mut paired_paths: Vec<&Path> = Vec::new();
     for r in &refs {
         let best = run.iter().map(|l| (l, l.distance(r))).min_by_key(|(_, (d, p))| d + p);
         match best {
@@ -234,7 +314,7 @@ fn fit_style(
                 edited.add_image(&r.img);
                 originals.add_image(&o.img);
                 paired_refs += 1;
-                paired_ids.push(o.photo.id);
+                paired_paths.push(&o.path);
             }
             _ => unpaired.push(r),
         }
@@ -242,7 +322,7 @@ fn fit_style(
 
     let (preset, mode, used, baseline_count, references_unpaired) = if paired_refs > 0 {
         let p = StylePreset::fit_paired(name, &edited, &originals, strength).map_err(|e| e.to_string())?;
-        let left_out = unpaired.iter().map(|r| r.photo.path.clone()).collect();
+        let left_out = unpaired.iter().map(|r| r.path.clone()).collect();
         (p, FitMode::Paired, paired_refs, paired_refs, left_out)
     } else {
         let mut reference = StyleStats::new();
@@ -254,12 +334,12 @@ fn fit_style(
         (p, FitMode::Unpaired, refs.len(), baseline.image_count(), Vec::new())
     };
 
-    // Previews: photos the preset will actually be used on — prefer ones not
-    // already edited (i.e. not a paired original), spread across the run.
-    let pool: Vec<&Loaded> = run.iter().filter(|l| !paired_ids.contains(&l.photo.id)).collect();
+    // Previews: photos the preset will actually be used on — skip the ones
+    // that already have an edit (paired originals), spread across the set.
+    let pool: Vec<&Loaded> = run.iter().filter(|l| !paired_paths.contains(&l.path.as_path())).collect();
     let pool = if pool.is_empty() { run.iter().collect() } else { pool };
     let step = (pool.len() / PREVIEW_COUNT).max(1);
-    let preview_ids = pool.iter().step_by(step).take(PREVIEW_COUNT).map(|l| l.photo.id.to_string()).collect();
+    let preview_paths = pool.iter().step_by(step).take(PREVIEW_COUNT).map(|l| l.path.clone()).collect();
 
     Ok(StylePresetResponse {
         files: formats.iter().map(|f| preset.render(*f)).collect(),
@@ -268,33 +348,27 @@ fn fit_style(
         references_used: used,
         references_unpaired,
         references_failed: failed,
+        targets_total,
+        targets_read: run.len(),
         baseline_count,
-        preview_ids,
+        preview_paths,
     })
 }
 
-/// Read thumbnails (disk cache, rendering misses) and hash them on a
-/// CPU-sized worker pool. Unreadable photos are skipped.
-fn load_parallel(photos: &[&PhotoRef], thumbs: &ThumbDiskCache, hasher: &HashOnlyExtractor) -> Vec<Loaded> {
-    let n_workers = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).min(photos.len()).max(1);
+/// Decode thumbnails and hash them on a CPU-sized worker pool, keeping input
+/// order. Unreadable photos are skipped.
+fn load_parallel(paths: &[PathBuf], hasher: &HashOnlyExtractor) -> Vec<Loaded> {
+    let n_workers = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).min(paths.len()).max(1);
     let next = AtomicUsize::new(0);
-    let out: Mutex<Vec<(usize, Loaded)>> = Mutex::new(Vec::with_capacity(photos.len()));
+    let out: Mutex<Vec<(usize, Loaded)>> = Mutex::new(Vec::with_capacity(paths.len()));
     std::thread::scope(|scope| {
         for _ in 0..n_workers {
             scope.spawn(|| loop {
                 let i = next.fetch_add(1, Ordering::Relaxed);
-                let Some(photo) = photos.get(i) else { break };
-                let loaded = thumbs
-                    .read_or_render(photo)
-                    .ok()
-                    .and_then(|bytes| image::load_from_memory(&bytes).ok())
-                    .and_then(|img| {
-                        let f = hasher.extract(photo, &img).ok()?;
-                        Some(Loaded { photo: (*photo).clone(), img, dhash: f.dhash, phash: f.phash })
-                    });
-                match loaded {
-                    Some(l) => out.lock().unwrap().push((i, l)),
-                    None => tracing::warn!(path = %photo.path.display(), "style preset: thumbnail unreadable; skipped"),
+                let Some(path) = paths.get(i) else { break };
+                match load(path, hasher) {
+                    Ok(l) => out.lock().unwrap().push((i, l)),
+                    Err(e) => tracing::warn!(path = %path.display(), error = %e, "style: photo unreadable; skipped"),
                 }
             });
         }
@@ -304,38 +378,46 @@ fn load_parallel(photos: &[&PhotoRef], thumbs: &ThumbDiskCache, hasher: &HashOnl
     v.into_iter().map(|(_, l)| l).collect()
 }
 
-pub async fn style_preview(
-    State(state): State<AppState>,
-    Path(run_id): Path<String>,
-    Json(req): Json<StylePreviewRequest>,
-) -> Response {
-    let Ok(uuid) = uuid::Uuid::parse_str(&req.photo_id) else {
-        return bad_request(format!("bad photo id: {}", req.photo_id));
-    };
-    state.ensure_rehydrated(&run_id).await;
-    let (photo, output_dir) = {
-        let guard = state.runs.lock().await;
-        let Some(rec) = guard.get(&run_id) else {
-            return (StatusCode::NOT_FOUND, "run not found").into_response();
-        };
-        let Some(p) = rec.photos.get(&PhotoId(uuid)) else {
-            return (StatusCode::NOT_FOUND, "photo not in run").into_response();
-        };
-        (p.clone(), rec.output.clone())
-    };
-    let preset = req.preset;
+pub async fn style_preview(Json(req): Json<StylePreviewRequest>) -> Response {
+    if let Some(forbidden) = check_in_roots(std::iter::once(&req.path)) {
+        return forbidden;
+    }
     let result = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, String> {
-        let thumbs =
-            ThumbDiskCache::new(output_dir.join(".thumbs"), DEFAULT_THUMB_LONG_EDGE, DEFAULT_THUMB_QUALITY);
-        let bytes = thumbs.read_or_render(&photo).map_err(|e| e.to_string())?;
-        let img = image::load_from_memory(&bytes).map_err(|e| e.to_string())?;
-        let styled = image::DynamicImage::ImageRgb8(preset.apply_preview(&img));
-        encode_jpeg(&styled, 88).map_err(|e| e.to_string())
+        let photo = photo_ref(&req.path).ok_or_else(|| "unsupported file type".to_string())?;
+        let img = decode_thumbnail_for(&photo, thumb_spec()).map_err(|e| e.to_string())?;
+        let out = match &req.preset {
+            Some(p) => image::DynamicImage::ImageRgb8(p.apply_preview(&img)),
+            None => img,
+        };
+        encode_jpeg(&out, 88).map_err(|e| e.to_string())
     })
     .await;
     match result {
         Ok(Ok(bytes)) => ([(axum::http::header::CONTENT_TYPE, "image/jpeg")], bytes).into_response(),
-        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+        Ok(Err(e)) => bad_request(e),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("preview task: {e}")).into_response(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn choose_targets_keeps_likely_originals_and_samples_the_rest() {
+        let mut targets: Vec<PathBuf> = (0..1000).map(|i| PathBuf::from(format!("/t/DSC{i:05}.ARW"))).collect();
+        targets.push(PathBuf::from("/t/IMG_0042.CR2"));
+        let refs = vec![PathBuf::from("/e/IMG_0042-Edit.jpg")];
+        let chosen = choose_targets(targets, &refs, 100);
+        assert_eq!(chosen.len(), 100);
+        assert!(chosen.contains(&PathBuf::from("/t/IMG_0042.CR2")), "name-matched original kept");
+        let firsts: Vec<_> = chosen.iter().filter(|p| p.to_string_lossy().contains("DSC0000")).collect();
+        assert!(firsts.len() <= 2, "the rest is sampled across the set, not the first N");
+    }
+
+    #[test]
+    fn choose_targets_is_a_no_op_under_the_cap() {
+        let t = vec![PathBuf::from("/b.jpg"), PathBuf::from("/a.jpg"), PathBuf::from("/a.jpg")];
+        assert_eq!(choose_targets(t, &[], 10), vec![PathBuf::from("/a.jpg"), PathBuf::from("/b.jpg")]);
     }
 }

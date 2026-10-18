@@ -269,12 +269,17 @@ export interface StylePresetResponse {
   preset: StylePreset;
   /** One rendered file per requested format. */
   files: StyleFile[];
-  /** "paired": references were edits of run photos (precise);
+  /** "paired": references were edits of photos to restyle (precise);
    *  "unpaired": unrelated references (rough approximation). */
   mode: "paired" | "unpaired";
   references_used: number;
   references_unpaired: string[];
   references_failed: { path: string; reason: string }[];
+  /** Photos to restyle that were found, and how many were actually read
+   *  (large sets are capped: name-matched originals first, then sampled). */
+  targets_total: number;
+  targets_read: number;
   baseline_count: number;
-  preview_ids: string[];
+  /** Photos to restyle suggested for before/after previews. */
+  preview_paths: string[];
 }

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Aperture, Settings as SettingsIcon } from "lucide-react";
+import { Aperture, Images, Palette, Settings as SettingsIcon } from "lucide-react";
 import { ScanForm } from "./components/ScanForm";
+import { StyleStudio } from "./components/StyleStudio";
 import { RunCard } from "./components/RunCard";
 import { RunDetailDialog } from "./components/RunDetailDialog";
 import { GroupDetailDialog } from "./components/GroupDetailDialog";
@@ -13,7 +14,7 @@ import { Button } from "./components/ui/button";
 import { Toaster } from "./components/ui/sonner";
 import { api } from "./lib/api";
 import type { ProgressEvent, RunProgress, RunRecord, VlmSettings } from "./lib/types";
-import { I18nContext, LANG_STORAGE_KEY, messages, type Lang } from "./lib/i18n";
+import { I18nContext, LANG_STORAGE_KEY, messages, useM, type Lang } from "./lib/i18n";
 import {
   loadOverrides,
   removeOverrides,
@@ -42,6 +43,17 @@ export default function App() {
     loadVlmSettings()
   );
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // Top-level tool: culling (scan runs) or style extraction. Independent —
+  // style extraction doesn't need a scan. Remembered per browser.
+  const [mode, setModeState] = useState<AppMode>(loadMode);
+  const setMode = (next: AppMode) => {
+    setModeState(next);
+    try {
+      localStorage.setItem(MODE_STORAGE_KEY, next);
+    } catch {
+      /* storage unavailable: just don't remember */
+    }
+  };
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [version, setVersion] = useState<string | null>(null);
   // SSE health. We light up the banner the first time a stream errors
@@ -373,7 +385,20 @@ export default function App() {
         </div>
 
         <main className="max-w-5xl mx-auto px-6 pb-20">
-          {!hasRuns ? (
+          {mode === "style" ? (
+            <>
+              <header className="pt-8 mb-8 flex flex-wrap items-center gap-3">
+                <span className="grid place-items-center h-10 w-10 rounded-xl bg-primary/10 text-primary ring-1 ring-primary/15 shadow-sm shrink-0">
+                  <Aperture className="h-5 w-5" />
+                </span>
+                <h1 className="text-xl font-semibold tracking-tight shrink-0">
+                  {m.common.appName}
+                </h1>
+                <ModeSwitch mode={mode} onChange={setMode} />
+              </header>
+              <StyleStudio />
+            </>
+          ) : !hasRuns ? (
             // Empty: a Google-like centered hero — brand + one prominent input.
             <FadeUp className="min-h-[78vh] flex flex-col items-center justify-center text-center gap-7">
               <div className="flex flex-col items-center gap-3">
@@ -390,18 +415,20 @@ export default function App() {
                   {m.common.firstRunHint}
                 </p>
               </div>
+              <ModeSwitch mode={mode} onChange={setMode} />
               <ScanForm onScanStarted={handleScanStarted} />
             </FadeUp>
           ) : (
             // With runs: brand shrinks into a top bar with a compact input.
             <>
-              <header className="pt-8 mb-8 flex items-center gap-3">
+              <header className="pt-8 mb-8 flex flex-wrap items-center gap-3">
                 <span className="grid place-items-center h-10 w-10 rounded-xl bg-primary/10 text-primary ring-1 ring-primary/15 shadow-sm shrink-0">
                   <Aperture className="h-5 w-5" />
                 </span>
                 <h1 className="text-xl font-semibold tracking-tight shrink-0">
                   {m.common.appName}
                 </h1>
+                <ModeSwitch mode={mode} onChange={setMode} />
                 <div className="flex-1 min-w-0 max-w-xl ml-auto">
                   <ScanForm onScanStarted={handleScanStarted} compact />
                 </div>
@@ -529,5 +556,47 @@ export default function App() {
         <Toaster richColors closeButton position="bottom-right" />
       </div>
     </I18nContext.Provider>
+  );
+}
+
+type AppMode = "scan" | "style";
+const MODE_STORAGE_KEY = "photo-pick.mode";
+
+function loadMode(): AppMode {
+  try {
+    return localStorage.getItem(MODE_STORAGE_KEY) === "style" ? "style" : "scan";
+  } catch {
+    return "scan";
+  }
+}
+
+/// Segmented switch between the two top-level tools.
+function ModeSwitch({ mode, onChange }: { mode: AppMode; onChange: (m: AppMode) => void }) {
+  const m = useM();
+  const items: { id: AppMode; label: string; Icon: typeof Images }[] = [
+    { id: "scan", label: m.mode.scan, Icon: Images },
+    { id: "style", label: m.mode.style, Icon: Palette },
+  ];
+  return (
+    <div role="tablist" className="inline-flex rounded-lg border bg-muted/50 p-0.5 text-sm shrink-0">
+      {items.map(({ id, label, Icon }) => (
+        <button
+          key={id}
+          type="button"
+          role="tab"
+          aria-selected={mode === id}
+          onClick={() => onChange(id)}
+          className={
+            "inline-flex items-center gap-1.5 rounded-md px-3 py-1 transition-colors " +
+            (mode === id
+              ? "bg-background text-foreground shadow-sm"
+              : "text-muted-foreground hover:text-foreground")
+          }
+        >
+          <Icon className="h-3.5 w-3.5" />
+          {label}
+        </button>
+      ))}
+    </div>
   );
 }
