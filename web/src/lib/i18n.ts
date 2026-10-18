@@ -312,14 +312,26 @@ const enMessages = {
       fileDelta: (here: number, there: number) =>
         `File set differs too: ${here} photo(s) only in this run, ${there} only in the other.`,
     },
+    mode: {
+      scan: "Cull",
+      style: "Style extraction",
+    },
     stylePreset: {
-      button: "Style preset…",
-      title: "Style preset",
-      desc: "Learn a look from reference photos and save it as a Lightroom preset and/or a 3D LUT, to apply to any photo in your editor and fine-tune.",
-      references: "Reference photos",
+      title: "Style extraction",
+      desc: "Learn a look from reference photos and save it as a Lightroom preset and/or a 3D LUT, then apply it to your photos in your editor and fine-tune.",
+      references: "Reference photos (the look you want)",
       addReferences: "Add photos…",
       referencesHint:
-        "Best: a few photos from this shoot you've already edited (export them as JPEG) — they're matched to their originals here for a precise preset. Unrelated photos work too, but only roughly.",
+        "Best: a few photos from the set below that you've already edited (export them as JPEG) — they're matched to their originals for a precise preset. Unrelated photos work too, but only roughly.",
+      targets: "Photos to restyle",
+      chooseTargets: "Choose folder or photos…",
+      targetsHint:
+        "The photos you want to give this look. Open a folder and confirm without ticking anything to use the whole folder (subfolders included), or tick individual photos.",
+      targetsRead: (read: number, total: number) =>
+        read === total
+          ? `Read ${read} photo${read === 1 ? "" : "s"} to restyle.`
+          : `Read ${read} of ${total} photos to restyle (large sets are capped: likely originals by file name first, then an even sample).`,
+      working: "Reading photos… large folders can take a minute.",
       pickFilesHint: "Tick the photos themselves in the browser (not just the folder).",
       remove: "Remove",
       name: "Preset name",
@@ -349,11 +361,11 @@ const enMessages = {
       modePaired: "Precise",
       modeUnpaired: "Approximate",
       pairedExplain: (n: number) =>
-        `Matched ${n} reference${n === 1 ? "" : "s"} to ${n === 1 ? "its" : "their"} original${n === 1 ? "" : "s"} in this run and learned the edit directly: tone curve, RGB curves and saturation.`,
+        `Matched ${n} reference${n === 1 ? "" : "s"} to ${n === 1 ? "its" : "their"} original${n === 1 ? "" : "s"} among the photos to restyle and learned the edit directly: tone curve, RGB curves and saturation.`,
       unpairedExplain:
-        "These references aren't edits of photos in this run, so only content-independent traits were learned — faded blacks / soft highlights, contrast and the shadow-vs-highlight colour split. Expect a rough starting point, not a match.",
-      leftOut: (names: string) => `No original found in this run, left out: ${names}`,
-      previewNote: "Approximate preview on photos from this run — Lightroom's own rendering will differ somewhat.",
+        "These references aren't edits of the photos to restyle, so only content-independent traits were learned — faded blacks / soft highlights, contrast and the shadow-vs-highlight colour split. Expect a rough starting point, not a match.",
+      leftOut: (names: string) => `No original found among the photos to restyle, left out: ${names}`,
+      previewNote: "Approximate preview on some of the photos to restyle — your editor's own rendering will differ somewhat.",
       before: "Before",
       after: "After",
     },
@@ -723,14 +735,26 @@ export const messages: Record<Lang, Messages> = {
       fileDelta: (here: number, there: number) =>
         `文件集合也有差异：${here} 张仅在本次，${there} 张仅在对方。`,
     },
+    mode: {
+      scan: "扫描选片",
+      style: "风格提取",
+    },
     stylePreset: {
-      button: "风格预设…",
-      title: "风格预设",
-      desc: "从样例照片学习一种风格，保存成 Lightroom 预设和/或 3D LUT，在修图软件里套用到任意照片，再手动微调。",
-      references: "样例照片",
+      title: "风格提取",
+      desc: "从样例照片学习一种风格，保存成 Lightroom 预设和/或 3D LUT，再在修图软件里套用到你的照片上，并手动微调。",
+      references: "样例照片（想要的风格）",
       addReferences: "添加照片…",
       referencesHint:
-        "最好选这次拍摄中你已经修好的几张（导出为 JPEG），程序会在本次扫描里找到它们的原片，生成精确的预设。不相关的照片也可以，但只能学到大致风格。",
+        "最好选下面这组照片中你已经修好的几张（导出为 JPEG），程序会找到它们的原片，生成精确的预设。不相关的照片也可以，但只能学到大致风格。",
+      targets: "要调色的照片",
+      chooseTargets: "选择文件夹或照片…",
+      targetsHint:
+        "想要套用这种风格的照片。打开文件夹后不勾选直接确认，就使用整个文件夹（包括子文件夹）；也可以勾选具体照片。",
+      targetsRead: (read: number, total: number) =>
+        read === total
+          ? `已读取 ${read} 张要调色的照片。`
+          : `已读取 ${total} 张中的 ${read} 张（照片太多时有上限：优先选文件名与样例相近的原片，其余均匀抽样）。`,
+      working: "正在读取照片……文件夹较大时可能需要一分钟。",
       pickFilesHint: "请在浏览窗口里勾选具体照片，而不是只选文件夹。",
       remove: "移除",
       name: "预设名称",
@@ -759,11 +783,11 @@ export const messages: Record<Lang, Messages> = {
       modePaired: "精确",
       modeUnpaired: "近似",
       pairedExplain: (n: number) =>
-        `已在本次扫描中找到 ${n} 张样例的原片，直接学习修图前后的变化：色调曲线、RGB 曲线和饱和度。`,
+        `已在要调色的照片中找到 ${n} 张样例的原片，直接学习修图前后的变化：色调曲线、RGB 曲线和饱和度。`,
       unpairedExplain:
-        "这些样例不是本次扫描中照片的修图版本，所以只学习了与画面内容无关的部分：黑位/高光的褪色、对比度，以及阴影与高光的冷暖差异。只能作为大致的起点，不会完全一致。",
-      leftOut: (names: string) => `本次扫描中没找到原片，未使用：${names}`,
-      previewNote: "以下是在本次扫描照片上的近似预览，Lightroom 的实际效果会略有不同。",
+        "这些样例不是要调色照片的修图版本，所以只学习了与画面内容无关的部分：黑位/高光的褪色、对比度，以及阴影与高光的冷暖差异。只能作为大致的起点，不会完全一致。",
+      leftOut: (names: string) => `要调色的照片中没找到原片，未使用：${names}`,
+      previewNote: "以下是在部分要调色照片上的近似预览，修图软件的实际效果会略有不同。",
       before: "原图",
       after: "套用后",
     },

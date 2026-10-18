@@ -169,29 +169,38 @@ export const api = {
     });
   },
 
-  /// Learn a look from reference photos and get it back as a Lightroom
-  /// preset. `strength` is 0–1.
-  async stylePreset(
-    runId: string,
-    referencePaths: string[],
-    name: string,
-    strength: number,
-    formats: StyleFormat[]
-  ): Promise<StylePresetResponse> {
-    return request(`/api/runs/${runId}/style-preset`, {
+  /// Standalone style extraction: learn a look from reference photos, fit
+  /// against the photos to restyle (a folder and/or files), and render it in
+  /// the requested formats. `strength` is 0–1.
+  async stylePreset(req: {
+    referencePaths: string[];
+    targetDir: string | null;
+    targetPaths: string[];
+    name: string;
+    strength: number;
+    formats: StyleFormat[];
+  }): Promise<StylePresetResponse> {
+    return request(`/api/style/preset`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ reference_paths: referencePaths, name, strength, formats }),
+      body: JSON.stringify({
+        reference_paths: req.referencePaths,
+        target_dir: req.targetDir,
+        target_paths: req.targetPaths,
+        name: req.name,
+        strength: req.strength,
+        formats: req.formats,
+      }),
     });
   },
 
-  /// Approximate preview of `preset` on one run photo; resolves to an object
-  /// URL the caller must revoke.
-  async stylePreview(runId: string, preset: StylePreset, photoId: string): Promise<string> {
-    const resp = await fetch(`/api/runs/${runId}/style-preview`, {
+  /// Thumbnail of a photo, with `preset` approximately applied (or untouched
+  /// when null); resolves to an object URL the caller must revoke.
+  async stylePreview(path: string, preset: StylePreset | null): Promise<string> {
+    const resp = await fetch(`/api/style/preview`, {
       method: "POST",
       headers: { ...authHeaders(), "content-type": "application/json" },
-      body: JSON.stringify({ preset, photo_id: photoId }),
+      body: JSON.stringify({ path, preset }),
     });
     if (!resp.ok) {
       const text = await resp.text().catch(() => resp.statusText);
