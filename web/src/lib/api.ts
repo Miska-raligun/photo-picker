@@ -11,6 +11,7 @@ import type {
   ScanRequest,
   SimilarReport,
   VlmConfig,
+  StyleFormat,
   StylePreset,
   StylePresetResponse,
 } from "./types";
@@ -174,12 +175,13 @@ export const api = {
     runId: string,
     referencePaths: string[],
     name: string,
-    strength: number
+    strength: number,
+    formats: StyleFormat[]
   ): Promise<StylePresetResponse> {
     return request(`/api/runs/${runId}/style-preset`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ reference_paths: referencePaths, name, strength }),
+      body: JSON.stringify({ reference_paths: referencePaths, name, strength, formats }),
     });
   },
 

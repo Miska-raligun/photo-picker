@@ -313,9 +313,9 @@ const enMessages = {
         `File set differs too: ${here} photo(s) only in this run, ${there} only in the other.`,
     },
     stylePreset: {
-      button: "LR preset…",
-      title: "Lightroom style preset",
-      desc: "Learn a look from reference photos and save it as a Lightroom preset you can import and apply to any photo, then fine-tune.",
+      button: "Style preset…",
+      title: "Style preset",
+      desc: "Learn a look from reference photos and save it as a Lightroom preset and/or a 3D LUT, to apply to any photo in your editor and fine-tune.",
       references: "Reference photos",
       addReferences: "Add photos…",
       referencesHint:
@@ -327,8 +327,25 @@ const enMessages = {
       strength: "Strength (%)",
       generate: "Generate",
       regenerate: "Regenerate",
-      download: "Download .xmp",
+      download: (ext: string) => `Download .${ext}`,
       failed: "Couldn't create the preset",
+      formats: "Output",
+      format: {
+        lr_preset: {
+          label: "Lightroom preset (.xmp)",
+          desc: "Lightroom Classic, Lightroom, Camera Raw. Stays editable as curves; works on RAW.",
+          howTo:
+            "Lightroom Classic: Develop → Presets panel → + → Import Presets…\nLightroom: Edit → Presets → ⋯ → Import Presets.",
+        },
+        cube_lut: {
+          label: "3D LUT (.cube)",
+          desc: "Photoshop, Affinity Photo, DaVinci Resolve, Capture One, darktable, video editors…",
+          howTo:
+            "Photoshop: Color Lookup adjustment layer → Load 3D LUT. Other apps: their LUT / colour-lookup tool. The LUT expects sRGB input — apply it after basic exposure and white balance. In Lightroom, a .cube can only be used by turning it into a profile in Camera Raw.",
+        },
+      },
+      settingsNote:
+        "Only the tone curve, RGB curves and saturation are included; exposure, white balance and other settings are left as they are.",
       modePaired: "Precise",
       modeUnpaired: "Approximate",
       pairedExplain: (n: number) =>
@@ -339,8 +356,6 @@ const enMessages = {
       previewNote: "Approximate preview on photos from this run — Lightroom's own rendering will differ somewhat.",
       before: "Before",
       after: "After",
-      importHowTo:
-        "Lightroom Classic: Develop → Presets panel → + → Import Presets… and pick the .xmp.\nLightroom: Edit → Presets → ⋯ → Import Presets.\nThe preset only sets the tone curve, RGB curves and saturation; your exposure, white balance and other settings stay as they are.",
     },
     export: {
       button: "Export…",
@@ -709,9 +724,9 @@ export const messages: Record<Lang, Messages> = {
         `文件集合也有差异：${here} 张仅在本次，${there} 张仅在对方。`,
     },
     stylePreset: {
-      button: "LR 预设…",
-      title: "Lightroom 风格预设",
-      desc: "从样例照片学习一种风格，保存成 Lightroom 预设。导入后可以套用到任意照片，再手动微调。",
+      button: "风格预设…",
+      title: "风格预设",
+      desc: "从样例照片学习一种风格，保存成 Lightroom 预设和/或 3D LUT，在修图软件里套用到任意照片，再手动微调。",
       references: "样例照片",
       addReferences: "添加照片…",
       referencesHint:
@@ -723,8 +738,24 @@ export const messages: Record<Lang, Messages> = {
       strength: "强度（%）",
       generate: "生成",
       regenerate: "重新生成",
-      download: "下载 .xmp",
+      download: (ext: string) => `下载 .${ext}`,
       failed: "预设生成失败",
+      formats: "输出格式",
+      format: {
+        lr_preset: {
+          label: "Lightroom 预设（.xmp）",
+          desc: "适用于 Lightroom Classic、Lightroom、Camera Raw。导入后仍是可调的曲线，RAW 也能用。",
+          howTo:
+            "Lightroom Classic：修改照片 → 预设面板 → + → 导入预设…\nLightroom（新版）：编辑 → 预设 → ⋯ → 导入预设。",
+        },
+        cube_lut: {
+          label: "3D LUT（.cube）",
+          desc: "适用于 Photoshop、Affinity Photo、达芬奇、Capture One、darktable 以及各类视频软件。",
+          howTo:
+            "Photoshop：新建“颜色查找”调整图层 → 载入 3D LUT。其他软件：使用各自的 LUT / 颜色查找功能。LUT 按 sRGB 输入设计，建议在曝光和白平衡调好之后再套用。Lightroom 不能直接读取 .cube，需要先在 Camera Raw 中把它做成配置文件。",
+        },
+      },
+      settingsNote: "只包含色调曲线、RGB 曲线和饱和度，不会改动曝光、白平衡等其他设置。",
       modePaired: "精确",
       modeUnpaired: "近似",
       pairedExplain: (n: number) =>
@@ -735,8 +766,6 @@ export const messages: Record<Lang, Messages> = {
       previewNote: "以下是在本次扫描照片上的近似预览，Lightroom 的实际效果会略有不同。",
       before: "原图",
       after: "套用后",
-      importHowTo:
-        "Lightroom Classic：修改照片 → 预设面板 → + → 导入预设…，选择这个 .xmp。\nLightroom（新版）：编辑 → 预设 → ⋯ → 导入预设。\n预设只包含色调曲线、RGB 曲线和饱和度，不会改动你的曝光、白平衡等其他设置。",
     },
     export: {
       button: "导出…",

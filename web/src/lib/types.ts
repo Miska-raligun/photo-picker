@@ -256,11 +256,19 @@ export interface StylePreset {
   saturation: number;
 }
 
+/** Export formats for a fitted style; mirrors `StyleFormat` in the core. */
+export type StyleFormat = "lr_preset" | "cube_lut";
+
+export interface StyleFile {
+  format: StyleFormat;
+  file_name: string;
+  content: string;
+}
+
 export interface StylePresetResponse {
   preset: StylePreset;
-  /** The preset file contents (Lightroom / Camera Raw .xmp). */
-  xmp: string;
-  file_name: string;
+  /** One rendered file per requested format. */
+  files: StyleFile[];
   /** "paired": references were edits of run photos (precise);
    *  "unpaired": unrelated references (rough approximation). */
   mode: "paired" | "unpaired";
