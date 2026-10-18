@@ -394,6 +394,58 @@ impl StylePreset {
         out
     }
 
+    /// The same transform as [`Self::apply_preview`] on one colour, in float
+    /// (0–1, sRGB-encoded) without 8-bit rounding between stages. Used to bake
+    /// LUTs, where per-stage quantisation would show up as banding.
+    pub fn apply_rgb(&self, rgb: [f32; 3]) -> [f32; 3] {
+        let master = curve_lut_f32(&self.tone_curve);
+        let chans = [curve_lut_f32(&self.red_curve), curve_lut_f32(&self.green_curve), curve_lut_f32(&self.blue_curve)];
+        self.apply_rgb_with(&master, &chans, rgb)
+    }
+
+    fn apply_rgb_with(&self, master: &[f32; 256], chans: &[[f32; 256]; 3], rgb: [f32; 3]) -> [f32; 3] {
+        let k = 1.0 + self.saturation as f32 / 100.0;
+        let out = [0, 1, 2].map(|c| {
+            let m = sample_lut(master, rgb[c] * 255.0);
+            sample_lut(&chans[c], m) / 255.0
+        });
+        let y = luma(out[0], out[1], out[2]);
+        out.map(|c| (y + (c - y) * k).clamp(0.0, 1.0))
+    }
+
+    /// Render the preset in one export format.
+    pub fn render(&self, format: StyleFormat) -> StyleFile {
+        let content = match format {
+            StyleFormat::LrPreset => self.to_lr_preset_xmp(),
+            StyleFormat::CubeLut => self.to_cube_lut(CUBE_SIZE),
+        };
+        StyleFile { format, file_name: format!("{}.{}", self.file_stem(), format.extension()), content }
+    }
+
+    /// Adobe/Resolve `.cube` 3D LUT of the same transform, sRGB in and out.
+    /// Red varies fastest, then green, then blue, per the format.
+    pub fn to_cube_lut(&self, size: usize) -> String {
+        let size = size.clamp(2, 65);
+        let master = curve_lut_f32(&self.tone_curve);
+        let chans = [curve_lut_f32(&self.red_curve), curve_lut_f32(&self.green_curve), curve_lut_f32(&self.blue_curve)];
+        let title = self.name.replace(['"', '\n', '\r'], " ");
+        let mut out = format!(
+            "# Created by photo-pick: tone curve, RGB curves and saturation learned from reference photos.\n\
+             # Input and output are sRGB-encoded (display) values; apply it to an image in sRGB.\n\
+             TITLE \"{title}\"\nLUT_3D_SIZE {size}\nDOMAIN_MIN 0.0 0.0 0.0\nDOMAIN_MAX 1.0 1.0 1.0\n"
+        );
+        let step = 1.0 / (size - 1) as f32;
+        for b in 0..size {
+            for g in 0..size {
+                for r in 0..size {
+                    let [ro, go, bo] = self.apply_rgb_with(&master, &chans, [r as f32 * step, g as f32 * step, b as f32 * step]);
+                    out.push_str(&format!("{ro:.6} {go:.6} {bo:.6}\n"));
+                }
+            }
+        }
+        out
+    }
+
     fn luts(&self) -> CurveLuts {
         CurveLuts {
             master: curve_lut(&self.tone_curve),
@@ -462,8 +514,8 @@ impl StylePreset {
         )
     }
 
-    /// A file name for the preset derived from its name.
-    pub fn file_name(&self) -> String {
+    /// A file-name stem derived from the preset name.
+    pub fn file_stem(&self) -> String {
         let stem: String = self
             .name
             .chars()
@@ -471,8 +523,44 @@ impl StylePreset {
             .collect::<String>()
             .trim()
             .to_string();
-        format!("{}.xmp", if stem.is_empty() { "photo-pick style" } else { &stem })
+        if stem.is_empty() { "photo-pick style".to_string() } else { stem }
     }
+}
+
+/// Edge length of exported 3D LUTs: 33³ is the common choice (Photoshop,
+/// Resolve, Capture One all read it) and is ample for smooth curves.
+const CUBE_SIZE: usize = 33;
+
+/// Export formats for a fitted style. Supporting another app means adding a
+/// variant here plus its arm in [`StylePreset::render`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StyleFormat {
+    /// Lightroom Classic / Lightroom / Camera Raw preset (`.xmp`). Keeps the
+    /// settings editable as sliders and curves; works on RAW.
+    LrPreset,
+    /// 3D LUT (`.cube`) for Photoshop, Affinity Photo, DaVinci Resolve,
+    /// Capture One, darktable, video editors… Baked colour transform.
+    CubeLut,
+}
+
+impl StyleFormat {
+    pub const ALL: [StyleFormat; 2] = [StyleFormat::LrPreset, StyleFormat::CubeLut];
+
+    pub fn extension(self) -> &'static str {
+        match self {
+            StyleFormat::LrPreset => "xmp",
+            StyleFormat::CubeLut => "cube",
+        }
+    }
+}
+
+/// One rendered export.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct StyleFile {
+    pub format: StyleFormat,
+    pub file_name: String,
+    pub content: String,
 }
 
 fn check_inputs(reference: &StyleStats, baseline: &StyleStats) -> Result<(), StyleError> {
@@ -603,12 +691,25 @@ impl CurveLuts {
     }
 }
 
-/// Monotone cubic (Fritsch–Carlson) interpolation of a point curve into a LUT.
+/// [`curve_lut_f32`] rounded to 8 bits, for fast per-pixel previews.
 fn curve_lut(pts: &[(u8, u8)]) -> [u8; 256] {
-    let mut lut = [0u8; 256];
+    curve_lut_f32(pts).map(|v| v.round().clamp(0.0, 255.0) as u8)
+}
+
+/// Linear interpolation into a 256-entry LUT at fractional position `x`.
+fn sample_lut(lut: &[f32; 256], x: f32) -> f32 {
+    let x = x.clamp(0.0, 255.0);
+    let i = (x.floor() as usize).min(254);
+    let t = x - i as f32;
+    lut[i] * (1.0 - t) + lut[i + 1] * t
+}
+
+/// Monotone cubic (Fritsch–Carlson) interpolation of a point curve into a LUT.
+fn curve_lut_f32(pts: &[(u8, u8)]) -> [f32; 256] {
+    let mut lut = [0f32; 256];
     if pts.len() < 2 {
         for (i, v) in lut.iter_mut().enumerate() {
-            *v = i as u8;
+            *v = i as f32;
         }
         return lut;
     }
@@ -652,7 +753,7 @@ fn curve_lut(pts: &[(u8, u8)]) -> [u8; 256] {
                 + (-2.0 * t3 + 3.0 * t2) * ys[k + 1]
                 + (t3 - t2) * h * m[k + 1]
         };
-        *v = y.round().clamp(0.0, 255.0) as u8;
+        *v = y.clamp(0.0, 255.0);
     }
     lut
 }
@@ -871,6 +972,83 @@ mod tests {
         assert!((seq.mean_chroma() - merged.mean_chroma()).abs() < 1e-6);
     }
 
+    /// Trilinear lookup into a parsed `.cube` body (red fastest).
+    fn cube_lookup(values: &[[f32; 3]], n: usize, rgb: [f32; 3]) -> [f32; 3] {
+        let pos = rgb.map(|v| v.clamp(0.0, 1.0) * (n - 1) as f32);
+        let i0 = pos.map(|p| (p.floor() as usize).min(n - 2));
+        let t = [pos[0] - i0[0] as f32, pos[1] - i0[1] as f32, pos[2] - i0[2] as f32];
+        let at = |r: usize, g: usize, b: usize| values[r + n * (g + n * b)];
+        let mut out = [0.0f32; 3];
+        for dr in 0..2 {
+            for dg in 0..2 {
+                for db in 0..2 {
+                    let w = (if dr == 1 { t[0] } else { 1.0 - t[0] })
+                        * (if dg == 1 { t[1] } else { 1.0 - t[1] })
+                        * (if db == 1 { t[2] } else { 1.0 - t[2] });
+                    let v = at(i0[0] + dr, i0[1] + dg, i0[2] + db);
+                    for c in 0..3 {
+                        out[c] += w * v[c];
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    fn parse_cube(text: &str) -> (usize, Vec<[f32; 3]>) {
+        let mut n = 0;
+        let mut vals = Vec::new();
+        for line in text.lines() {
+            if let Some(v) = line.strip_prefix("LUT_3D_SIZE ") {
+                n = v.trim().parse().unwrap();
+            } else if line.starts_with(|c: char| c.is_ascii_digit() || c == '-') {
+                let f: Vec<f32> = line.split_whitespace().map(|x| x.parse().unwrap()).collect();
+                vals.push([f[0], f[1], f[2]]);
+            }
+        }
+        (n, vals)
+    }
+
+    /// The `.cube` must encode the same transform the preview (and the LR
+    /// preset's curves) apply: looking colours up in the LUT has to agree with
+    /// applying the preset directly.
+    #[test]
+    fn cube_lut_matches_the_preset_transform() {
+        let p = StylePreset::fit_paired("Cube test", &stats(&[grade(&scene(2))]), &stats(&[scene(2)]), 1.0)
+            .unwrap();
+        let f = p.render(StyleFormat::CubeLut);
+        assert_eq!(f.file_name, "Cube test.cube");
+        assert!(f.content.contains("TITLE \"Cube test\"") && f.content.contains("LUT_3D_SIZE 33"));
+        let (n, vals) = parse_cube(&f.content);
+        assert_eq!(n, 33);
+        assert_eq!(vals.len(), 33 * 33 * 33);
+        assert!(vals.iter().flatten().all(|v| (0.0..=1.0).contains(v)));
+        let mut worst = 0.0f32;
+        for i in 0..500u32 {
+            let rgb = [(i * 37 % 256) as f32 / 255.0, (i * 91 % 256) as f32 / 255.0, (i * 53 % 256) as f32 / 255.0];
+            let direct = p.apply_rgb(rgb);
+            let via_lut = cube_lookup(&vals, n, rgb);
+            for c in 0..3 {
+                worst = worst.max((direct[c] - via_lut[c]).abs());
+            }
+        }
+        assert!(worst < 2.0 / 255.0, "LUT deviates from the preset by {:.4}", worst);
+    }
+
+    #[test]
+    fn identity_preset_bakes_an_identity_lut() {
+        let s = stats(&[scene(1)]);
+        let p = StylePreset::fit_paired("id", &s, &s, 0.0).unwrap();
+        let (n, vals) = parse_cube(&p.to_cube_lut(17));
+        assert_eq!(n, 17);
+        for (i, v) in vals.iter().enumerate() {
+            let expect = [(i % 17) as f32 / 16.0, ((i / 17) % 17) as f32 / 16.0, (i / 289) as f32 / 16.0];
+            for c in 0..3 {
+                assert!((v[c] - expect[c]).abs() < 0.01, "entry {i}: {v:?} vs {expect:?}");
+            }
+        }
+    }
+
     #[test]
     fn preset_xmp_has_lr_preset_fields() {
         let mut p = StylePreset::fit_paired("x", &stats(&[grade(&scene(1))]), &stats(&[scene(1)]), 1.0)
@@ -894,6 +1072,6 @@ mod tests {
         }
         assert!(!x.contains("ProcessVersion"), "must not force a process version");
         assert_eq!(x.matches("<rdf:Seq>").count(), 4);
-        assert_eq!(p.file_name(), "Warm _film_ _ teal.xmp");
+        assert_eq!(p.render(StyleFormat::LrPreset).file_name, "Warm _film_ _ teal.xmp");
     }
 }

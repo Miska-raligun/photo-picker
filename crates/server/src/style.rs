@@ -19,7 +19,7 @@ use axum::response::{IntoResponse, Json, Response};
 use photo_pick_core::features::{hash::hamming, FeatureExtractor, HashOnlyExtractor};
 use photo_pick_core::ingest::{decode_thumbnail_for, encode_jpeg, scan_files, PhotoId, PhotoRef, ThumbnailSpec};
 use photo_pick_core::output::{ThumbDiskCache, DEFAULT_THUMB_LONG_EDGE, DEFAULT_THUMB_QUALITY};
-use photo_pick_core::style::{StylePreset, StyleStats};
+use photo_pick_core::style::{StyleFile, StyleFormat, StylePreset, StyleStats};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -44,6 +44,13 @@ pub struct StylePresetRequest {
     /// 0–1; scales every adjustment. Defaults to 1.
     #[serde(default)]
     pub strength: Option<f32>,
+    /// Files to produce. Defaults to a Lightroom preset only.
+    #[serde(default = "default_formats")]
+    pub formats: Vec<StyleFormat>,
+}
+
+fn default_formats() -> Vec<StyleFormat> {
+    vec![StyleFormat::LrPreset]
 }
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
@@ -62,8 +69,8 @@ pub struct ReferenceIssue {
 #[derive(Debug, Serialize)]
 pub struct StylePresetResponse {
     pub preset: StylePreset,
-    pub xmp: String,
-    pub file_name: String,
+    /// One rendered file per requested format, in request order.
+    pub files: Vec<StyleFile>,
     pub mode: FitMode,
     /// References that contributed to the fit.
     pub references_used: usize,
@@ -98,6 +105,11 @@ pub async fn style_preset(
     }
     if req.reference_paths.len() > MAX_REFERENCES {
         return bad_request(format!("at most {MAX_REFERENCES} reference photos"));
+    }
+    let mut seen = std::collections::HashSet::new();
+    let formats: Vec<StyleFormat> = req.formats.iter().copied().filter(|f| seen.insert(*f)).collect();
+    if formats.is_empty() {
+        return bad_request("pick at least one output format");
     }
     // Same allowlist as /browse and /scan: reading references must not be a
     // way around it. Paths that don't resolve fall through and are reported
@@ -142,7 +154,7 @@ pub async fn style_preset(
     let refs = req.reference_paths;
 
     let result = tokio::task::spawn_blocking(move || {
-        fit_style(&name, strength, &refs, &photos, &output_dir)
+        fit_style(&name, strength, &formats, &refs, &photos, &output_dir)
     })
     .await;
     match result {
@@ -169,6 +181,7 @@ impl Loaded {
 fn fit_style(
     name: &str,
     strength: f32,
+    formats: &[StyleFormat],
     reference_paths: &[PathBuf],
     photos: &[PhotoRef],
     output_dir: &std::path::Path,
@@ -249,8 +262,7 @@ fn fit_style(
     let preview_ids = pool.iter().step_by(step).take(PREVIEW_COUNT).map(|l| l.photo.id.to_string()).collect();
 
     Ok(StylePresetResponse {
-        xmp: preset.to_lr_preset_xmp(),
-        file_name: preset.file_name(),
+        files: formats.iter().map(|f| preset.render(*f)).collect(),
         preset,
         mode,
         references_used: used,

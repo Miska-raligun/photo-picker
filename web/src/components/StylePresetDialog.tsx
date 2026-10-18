@@ -14,7 +14,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { api } from "@/lib/api";
 import { useM } from "@/lib/i18n";
-import type { StylePresetResponse } from "@/lib/types";
+import type { StyleFile, StyleFormat, StylePresetResponse } from "@/lib/types";
 import { BrowseDialog, type BrowseResult } from "./BrowseDialog";
 import { SliderInput } from "./SliderInput";
 import { Thumb } from "./Thumb";
@@ -29,6 +29,14 @@ interface Props {
 
 const baseName = (p: string) => p.split(/[\\/]/).pop() ?? p;
 
+/// Offered export formats, in display order. Adding an app = a new
+/// `StyleFormat` on the server plus an entry here and its i18n strings.
+const FORMATS: StyleFormat[] = ["lr_preset", "cube_lut"];
+const MIME: Record<StyleFormat, string> = {
+  lr_preset: "application/rdf+xml",
+  cube_lut: "text/plain",
+};
+
 /// Learn a look from reference photos and download it as a Lightroom preset.
 /// The server pairs references with their originals when they're edits of
 /// photos in this run (precise fit); otherwise it falls back to a rough,
@@ -39,6 +47,7 @@ export function StylePresetDialog({ open, onOpenChange, runId, initialPath }: Pr
   const [refs, setRefs] = useState<string[]>([]);
   const [name, setName] = useState("");
   const [strength, setStrength] = useState(100);
+  const [formats, setFormats] = useState<StyleFormat[]>(["lr_preset"]);
   const [browseOpen, setBrowseOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<StylePresetResponse | null>(null);
@@ -79,7 +88,7 @@ export function StylePresetDialog({ open, onOpenChange, runId, initialPath }: Pr
   async function generate() {
     setBusy(true);
     try {
-      const r = await api.stylePreset(runId, refs, name.trim(), strength / 100);
+      const r = await api.stylePreset(runId, refs, name.trim(), strength / 100, formats);
       setResult(r);
     } catch (e) {
       toast.error(t.failed, { description: e instanceof Error ? e.message : String(e) });
@@ -88,14 +97,18 @@ export function StylePresetDialog({ open, onOpenChange, runId, initialPath }: Pr
     }
   }
 
-  function download() {
-    if (!result) return;
-    const url = URL.createObjectURL(new Blob([result.xmp], { type: "application/rdf+xml" }));
+  function download(file: StyleFile) {
+    const url = URL.createObjectURL(new Blob([file.content], { type: MIME[file.format] }));
     const a = document.createElement("a");
     a.href = url;
-    a.download = result.file_name;
+    a.download = file.file_name;
     a.click();
     URL.revokeObjectURL(url);
+  }
+
+  function toggleFormat(f: StyleFormat, on: boolean) {
+    setFormats((prev) => FORMATS.filter((x) => (x === f ? on : prev.includes(x))));
+    setResult(null);
   }
 
   return (
@@ -156,6 +169,24 @@ export function StylePresetDialog({ open, onOpenChange, runId, initialPath }: Pr
             <SliderInput value={strength} onChange={setStrength} min={0} max={100} step={5} />
           </div>
 
+          <div className="grid gap-1.5">
+            <span className="text-xs font-medium text-muted-foreground">{t.formats}</span>
+            {FORMATS.map((f) => (
+              <label key={f} className="flex items-start gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={formats.includes(f)}
+                  onChange={(e) => toggleFormat(f, e.target.checked)}
+                  className="mt-0.5 accent-primary"
+                />
+                <div className="text-sm">
+                  <div className="font-medium">{t.format[f].label}</div>
+                  <div className="text-xs text-muted-foreground">{t.format[f].desc}</div>
+                </div>
+              </label>
+            ))}
+          </div>
+
           {result && (
             <div className="space-y-3 rounded-md border p-3">
               <div className="flex items-start gap-2 text-sm">
@@ -210,20 +241,33 @@ export function StylePresetDialog({ open, onOpenChange, runId, initialPath }: Pr
                   </div>
                 </div>
               )}
-              <p className="text-xs text-muted-foreground whitespace-pre-line">{t.importHowTo}</p>
+              {result.files.map((f) => (
+                <p key={f.format} className="text-xs text-muted-foreground whitespace-pre-line">
+                  <span className="font-medium text-foreground">{f.file_name}</span>
+                  {" — "}
+                  {t.format[f.format].howTo}
+                </p>
+              ))}
+              <p className="text-xs text-muted-foreground">{t.settingsNote}</p>
             </div>
           )}
         </div>
 
         <DialogFooter className="gap-2">
-          <Button variant="outline" onClick={generate} disabled={busy || refs.length === 0}>
+          <Button
+            variant="outline"
+            onClick={generate}
+            disabled={busy || refs.length === 0 || formats.length === 0}
+          >
             {busy && <Loader2 className="h-4 w-4 animate-spin" />}
             {result ? t.regenerate : t.generate}
           </Button>
-          <Button onClick={download} disabled={!result || busy}>
-            <Download className="h-4 w-4" />
-            {t.download}
-          </Button>
+          {result?.files.map((f) => (
+            <Button key={f.format} onClick={() => download(f)} disabled={busy}>
+              <Download className="h-4 w-4" />
+              {t.download(f.file_name.split(".").pop() ?? "")}
+            </Button>
+          ))}
         </DialogFooter>
       </DialogContent>
 

@@ -515,15 +515,26 @@ async fn style_preset_pairs_an_edit_with_its_original() {
     let (status, json) = post_json(
         &app,
         &format!("/api/runs/{run_id}/style-preset"),
-        serde_json::json!({ "reference_paths": [edited], "name": "Trip look", "strength": 1.0 }),
+        serde_json::json!({
+            "reference_paths": [edited],
+            "name": "Trip look",
+            "strength": 1.0,
+            "formats": ["lr_preset", "cube_lut"],
+        }),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{json}");
     assert_eq!(json["mode"], "paired");
     assert_eq!(json["references_used"], 1);
-    assert_eq!(json["file_name"], "Trip look.xmp");
-    let xmp = json["xmp"].as_str().unwrap();
+    let files = json["files"].as_array().unwrap();
+    assert_eq!(files.len(), 2);
+    assert_eq!(files[0]["format"], "lr_preset");
+    assert_eq!(files[0]["file_name"], "Trip look.xmp");
+    let xmp = files[0]["content"].as_str().unwrap();
     assert!(xmp.contains("<crs:ToneCurvePV2012Red>") && xmp.contains("Trip look"));
+    assert_eq!(files[1]["format"], "cube_lut");
+    assert_eq!(files[1]["file_name"], "Trip look.cube");
+    assert!(files[1]["content"].as_str().unwrap().contains("LUT_3D_SIZE 33"));
     // The lifted-black grade shows up at the master curve's black point.
     assert!(json["preset"]["tone_curve"][0][1].as_u64().unwrap() >= 10, "{}", json["preset"]);
     // Previews skip the already-edited original.
@@ -593,7 +604,18 @@ async fn style_preset_falls_back_to_unpaired_and_reports_bad_references() {
     assert_eq!(json["references_used"], 1);
     assert_eq!(json["references_failed"].as_array().unwrap().len(), 1);
     assert_eq!(json["preset"]["saturation"], 0, "unpaired never transfers saturation");
-    assert_eq!(json["file_name"], "photo-pick style.xmp");
+    // Default format: a Lightroom preset only.
+    assert_eq!(json["files"].as_array().unwrap().len(), 1);
+    assert_eq!(json["files"][0]["file_name"], "photo-pick style.xmp");
+
+    // No formats → 400.
+    let (status, _) = post_json(
+        &app,
+        &format!("/api/runs/{run_id}/style-preset"),
+        serde_json::json!({ "reference_paths": [tmp.path().join("refs/other.jpg")], "formats": [] }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
 
     // Nothing readable / nothing given → 400.
     let (status, _) = post_json(
