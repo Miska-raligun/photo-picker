@@ -11,6 +11,8 @@ import type {
   ScanRequest,
   SimilarReport,
   VlmConfig,
+  StylePreset,
+  StylePresetResponse,
 } from "./types";
 
 class ApiError extends Error {
@@ -164,6 +166,36 @@ export const api = {
         ...(language ? { language } : {}),
       }),
     });
+  },
+
+  /// Learn a look from reference photos and get it back as a Lightroom
+  /// preset. `strength` is 0–1.
+  async stylePreset(
+    runId: string,
+    referencePaths: string[],
+    name: string,
+    strength: number
+  ): Promise<StylePresetResponse> {
+    return request(`/api/runs/${runId}/style-preset`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ reference_paths: referencePaths, name, strength }),
+    });
+  },
+
+  /// Approximate preview of `preset` on one run photo; resolves to an object
+  /// URL the caller must revoke.
+  async stylePreview(runId: string, preset: StylePreset, photoId: string): Promise<string> {
+    const resp = await fetch(`/api/runs/${runId}/style-preview`, {
+      method: "POST",
+      headers: { ...authHeaders(), "content-type": "application/json" },
+      body: JSON.stringify({ preset, photo_id: photoId }),
+    });
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => resp.statusText);
+      throw new ApiError(resp.status, text || resp.statusText);
+    }
+    return URL.createObjectURL(await resp.blob());
   },
 
   thumbUrl(runId: string, photoId: string): string {

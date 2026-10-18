@@ -9,6 +9,7 @@ pub mod models;
 pub mod output;
 pub mod pipeline;
 pub mod scoring;
+pub mod style;
 pub mod vlm;
 
 pub use error::{Error, Result};

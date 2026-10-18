@@ -9,6 +9,7 @@ pub mod assets;
 pub mod config;
 pub mod handlers;
 pub mod state;
+pub mod style;
 
 pub use app::router;
 pub use state::{AppState, RunRecord, RunStatus};

@@ -26,6 +26,7 @@ onnx-download = ["onnx", "photo-pick-core/onnx-download"]
 
 [dependencies]
 photo-pick-core    = { path = "../core", default-features = false }
+image              = { workspace = true }
 axum               = { workspace = true }
 tokio              = { workspace = true }
 tower              = { workspace = true }

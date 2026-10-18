@@ -65,6 +65,9 @@ impl ThumbDiskCache {
 
     /// Read encoded JPEG bytes if present on disk.
     pub fn read(&self, sha256_short: &[u8; 16]) -> Option<Vec<u8>> {
+        if is_unknown(sha256_short) {
+            return None;
+        }
         fs::read(self.path_for(sha256_short)).ok()
     }
 
@@ -73,7 +76,7 @@ impl ThumbDiskCache {
     /// Errors during write are logged but not surfaced — the cache is a
     /// best-effort optimisation, not part of the pipeline's correctness path.
     pub fn persist(&self, sha256_short: &[u8; 16], thumb: &DynamicImage) {
-        if self.read(sha256_short).is_some() {
+        if is_unknown(sha256_short) || self.read(sha256_short).is_some() {
             return; // already cached
         }
         let thumb_small = if thumb.width().max(thumb.height()) > self.spec.long_edge {
@@ -119,6 +122,9 @@ impl ThumbDiskCache {
         let img = decode_thumbnail_for(photo, self.spec)?;
         let bytes = encode_jpeg(&img, self.quality)?;
         // Persist for next time — best effort.
+        if is_unknown(&photo.sha256_short) {
+            return Ok(bytes);
+        }
         if let Err(err) = fs::create_dir_all(&self.dir) {
             tracing::debug!(dir = %self.dir.display(), %err, "thumb cache mkdir failed");
         } else {
@@ -178,6 +184,14 @@ impl ThumbDiskCache {
     }
 }
 
+/// An all-zero hash means "not known" (photo refs rebuilt from an older
+/// `report.json` after a server restart carry no hash). Such photos must
+/// bypass the cache entirely: they would all share one file name, and every
+/// photo would be served whichever thumbnail was written there first.
+fn is_unknown(sha256_short: &[u8; 16]) -> bool {
+    sha256_short.iter().all(|b| *b == 0)
+}
+
 #[allow(dead_code)]
 fn _unused_error_path_marker(_: Error) {}
 
@@ -212,16 +226,27 @@ mod tests {
         assert!(cache.read(&[0u8; 16]).is_none());
     }
 
+    /// Photo refs rebuilt from an older report.json carry an all-zero hash;
+    /// they must never share a cache file.
+    #[test]
+    fn unknown_hash_bypasses_the_cache() {
+        let td = TempDir::new().unwrap();
+        let cache = ThumbDiskCache::new(td.path().join("thumbs"), 480, 78);
+        cache.persist(&[0u8; 16], &dummy_thumb(64));
+        assert!(cache.read(&[0u8; 16]).is_none());
+        assert!(!cache.dir().exists() || std::fs::read_dir(cache.dir()).unwrap().next().is_none());
+    }
+
     #[test]
     fn trim_to_bytes_evicts_oldest_first() {
         let td = TempDir::new().unwrap();
         let cache = ThumbDiskCache::new(td.path().join("thumbs"), 480, 78);
-        for i in 0..4u8 {
+        for i in 1..=4u8 {
             cache.persist(&[i; 16], &dummy_thumb(64));
         }
         // Stagger mtimes explicitly — persist runs too fast to rely on clock
-        // ticks. [0] oldest … [3] newest.
-        for (i, secs) in [(0u8, 40u64), (1, 30), (2, 20), (3, 10)] {
+        // ticks. [1] oldest … [4] newest.
+        for (i, secs) in [(1u8, 40u64), (2, 30), (3, 20), (4, 10)] {
             let path = cache.dir().join(format!(
                 "{}.v{}.jpg",
                 hex::encode([i; 16]),
@@ -232,17 +257,17 @@ mod tests {
             f.set_modified(t).unwrap();
         }
         let one_file = std::fs::metadata(
-            cache.dir().join(format!("{}.v{}.jpg", hex::encode([0u8; 16]), super::THUMB_CACHE_VERSION)),
+            cache.dir().join(format!("{}.v{}.jpg", hex::encode([1u8; 16]), super::THUMB_CACHE_VERSION)),
         )
         .unwrap()
         .len();
-        // Budget for ~2 files → the two oldest ([0], [1]) go, newest stay.
+        // Budget for ~2 files → the two oldest ([1], [2]) go, newest stay.
         let removed = cache.trim_to_bytes(one_file * 2 + 1);
         assert_eq!(removed, 2);
-        assert!(cache.read(&[0u8; 16]).is_none());
         assert!(cache.read(&[1u8; 16]).is_none());
-        assert!(cache.read(&[2u8; 16]).is_some());
+        assert!(cache.read(&[2u8; 16]).is_none());
         assert!(cache.read(&[3u8; 16]).is_some());
+        assert!(cache.read(&[4u8; 16]).is_some());
 
         // Under budget → no-op.
         assert_eq!(cache.trim_to_bytes(u64::MAX), 0);

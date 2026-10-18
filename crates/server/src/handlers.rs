@@ -130,7 +130,7 @@ fn parse_provider(s: &str) -> ExecutionProvider {
 /// into LAN-shared mode (`PHOTO_PICK_BIND=0.0.0.0:7777`) without also
 /// setting `PHOTO_PICK_BROWSE_ROOTS` still keeps random off-host clients
 /// from enumerating `/etc` / `C:\Windows`.
-fn allowed_roots() -> Vec<PathBuf> {
+pub(crate) fn allowed_roots() -> Vec<PathBuf> {
     // Roots and the paths checked against them must canonicalize the same
     // way: on Windows `fs::canonicalize` yields the verbatim form (`\\?\C:\`),
     // which would never `starts_with`-match the stripped paths the handlers
@@ -163,7 +163,7 @@ fn allowed_roots() -> Vec<PathBuf> {
 /// True iff `path` (canonicalized) lives under one of `roots`. Empty roots
 /// means "deny everything" — that's the documented behaviour when the user
 /// explicitly sets `PHOTO_PICK_BROWSE_ROOTS=""` to lock down the server.
-fn path_under(path: &std::path::Path, roots: &[PathBuf]) -> bool {
+pub(crate) fn path_under(path: &std::path::Path, roots: &[PathBuf]) -> bool {
     roots.iter().any(|r| path.starts_with(r))
 }
 
@@ -675,7 +675,7 @@ pub async fn reveal(
 /// Strip Windows' verbatim/extended-length prefix (`\\?\`) and the UNC variant
 /// (`\\?\UNC\server\share` → `\\server\share`). No-op on non-Windows.
 #[cfg(windows)]
-fn strip_verbatim_prefix(p: PathBuf) -> PathBuf {
+pub(crate) fn strip_verbatim_prefix(p: PathBuf) -> PathBuf {
     let s = p.to_string_lossy().into_owned();
     if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
         return PathBuf::from(format!(r"\\{rest}"));
@@ -686,7 +686,7 @@ fn strip_verbatim_prefix(p: PathBuf) -> PathBuf {
     p
 }
 #[cfg(not(windows))]
-fn strip_verbatim_prefix(p: PathBuf) -> PathBuf { p }
+pub(crate) fn strip_verbatim_prefix(p: PathBuf) -> PathBuf { p }
 
 #[cfg(windows)]
 fn is_drive_root(p: &std::path::Path) -> bool {

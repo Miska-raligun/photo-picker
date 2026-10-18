@@ -2088,6 +2088,7 @@ dependencies = [
  "dirs",
  "futures-util",
  "http-body-util",
+ "image",
  "mime_guess",
  "photo-pick-core",
  "rust-embed",
